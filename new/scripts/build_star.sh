@@ -35,7 +35,7 @@ EOF
 
 msg() { echo "[build_star] $*"; }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SOURCE_DIR="$REPO_ROOT/source"
 
 if [[ ! -d "$SOURCE_DIR" ]]; then

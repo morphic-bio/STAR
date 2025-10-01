@@ -52,6 +52,7 @@ STAR \
   --soloWriteTagTable /tmp/run.cb_ub.bin
 ```
 
+<<<<<<< HEAD
 ### 3. Custom Gene Annotation Tags (ZG/ZX)
 - Introduces two new BAM tags that enhance gene annotation capabilities beyond standard GX/GN tags:
   - **ZG**: Gene set tag containing comma-separated Ensembl gene IDs for all genes overlapping the read
@@ -93,6 +94,8 @@ STAR \
 
 For detailed implementation information, see `new/docs/ZG_ZX_Implementation_Summary.md`.
 
+=======
+>>>>>>> da05a276c7ca890005f7d6cfe643a08adb8418ba
 ## Infrastructure Updates
 - `Parameters.cpp` defers unsorted BAM opening until Solo initialization has resolved whether the two-pass workflow is required, storing the decision in `outBAMunsortedUseSoloTmp`.
 - `ParametersSolo` parses and validates both new flags, manages the shared `BAMTagBuffer`, and extends error handling for CB/UB attribute combinations and feature requirements.

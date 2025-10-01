@@ -49,6 +49,7 @@ This document captures the code changes introduced in the fork relative to upstr
 - **Artifacts:** inputs reside in `new/testing/data/`; expected outputs and debug captures are in `new/testing/outputs/`.
 - **Manual workflows:** documented in `new/scripts/runSTAR*.sh` and `new/docs/two_pass_unsorted_usage.md` for production and debug scenarios.
 
+<<<<<<< HEAD
 ## Custom Gene Annotation Tags (ZG/ZX)
 ### Overview
 - Two new BAM tags that provide enhanced gene annotation beyond standard GX/GN tags:
@@ -106,8 +107,13 @@ This document captures the code changes introduced in the fork relative to upstr
 - **BAM-Only:** Complex tag format makes SAM output impractical; BAM binary representation is more efficient
 - **Strand Handling:** Unstranded mode avoids empty annotations from strand mismatch issues
 
+=======
+>>>>>>> da05a276c7ca890005f7d6cfe643a08adb8418ba
 ## Upgrade Considerations
 - Users migrating from upstream STAR must update run scripts to toggle `--soloAddTagsToUnsorted` when requesting unsorted BAM output with CB/UB tags.
 - Consumers of the binary tag table should decode the 32-byte header (`statusBits`, `cbBits`, `umiBits`, `recordCount`) before iterating records.
 - Temp file placement inherits `--outFileNamePrefix`; ensure the filesystem can accommodate the unsorted payload plus trailer overhead when the flag is active.
+<<<<<<< HEAD
 - For ZG/ZX tags: add `ZG ZX` to `--outSAMattributes` and ensure `GeneFull` is in `--soloFeatures`.
+=======
+>>>>>>> da05a276c7ca890005f7d6cfe643a08adb8418ba
