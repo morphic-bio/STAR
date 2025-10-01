@@ -10,7 +10,7 @@ Looking at the docs/ZG_ZX_Implementation_SUmmary.md and the code inf necesary - 
 
 ---
 
-_**Assistant (gpt-5-high)**_
+_**Assistant (claude-4.5-sonnet)**_
 
 <think><details><summary>Thought Process</summary>**Documenting ZX and ZG behavior**
 
@@ -395,6 +395,74 @@ Key additions in `docs/ZG_ZX_Implementation_Summary.md`:
 - Emission points citing `source/ReadAlign_alignBAM.cpp` for `ZGZXTags::formatZGTag` and `formatZXTag`.
 
 If you want, I can mirror a concise summary of these points in `docs/ZG_ZX_Concordance_Analysis.md` too.
+
+---
+
+_**User (2025-10-01 05:48Z)**_
+
+The README is screwed up. Can you regenerate it from the previous one in ../STAR-bak and update it with a summary of changes since the fork and point to documents in the new/docs TECHNICAL_NOTES.md
+
+---
+
+_**Assistant (claude-4.5-sonnet)**_
+
+I'll examine the backup README and the current state, then regenerate it with updated information about the fork and point to the new documentation structure.
+
+---
+
+Tool use: **read_file**
+
+Read file: /mnt/pikachu/STAR-bak/README.md
+
+---
+
+Tool use: **read_file**
+
+Read file: /mnt/pikachu/STAR/README.md
+
+---
+
+Tool use: **read_file**
+
+Read file: /mnt/pikachu/STAR/new/docs/TECHNICAL_NOTES.md
+
+---
+
+Could not find file '/mnt/pikachu/STAR/CHANGES_FORK.md' in the workspace.
+
+---
+
+Tool use: **list_dir**
+
+<details>
+            <summary>Listed directory undefined • **0** results</summary>
+        
+No results found
+</details>
+
+---
+
+Tool use: **read_file**
+
+Read file: /mnt/pikachu/STAR/CHANGES.md
+
+---
+
+Tool use: **read_file**
+
+Read file: /mnt/pikachu/STAR/new/docs/RELEASEnotes.md
+
+---
+
+Now I'll regenerate the README based on the backup version, with clear fork information and proper documentation references:
+
+---
+
+Tool use: **write**
+
+---
+
+
 
 ---
 
