@@ -7,6 +7,7 @@
 #include "OutSJ.h"
 #include "Transcriptome.h"
 #include "BAMoutput.h"
+#include "BAMoutputSoloTmp.h"
 #include "Quantifications.h"
 
 class ReadAlignChunk {//chunk of reads and alignments
@@ -23,6 +24,7 @@ public:
     OutSJ *chunkOutSJ, *chunkOutSJ1;
 
     BAMoutput *chunkOutBAMcoord, *chunkOutBAMunsorted, *chunkOutBAMquant;
+    BAMoutputSoloTmp *chunkOutBAMsoloTmp;
     Quantifications *chunkQuants;
     
     istringstream** readInStream;

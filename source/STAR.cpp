@@ -18,6 +18,7 @@
 #include "sysRemoveDir.h"
 #include "BAMfunctions.h"
 #include "bamSortByCoordinate.h"
+#include "BAMunsortedAddSoloTags.h"
 #include "Transcriptome.h"
 #include "signalFromBAM.h"
 #include "mapThreadsSpawn.h"
@@ -225,6 +226,11 @@ int main(int argInN, char *argIn[])
         bgzf_flush(P.inOut->outBAMfileUnsorted);
         bgzf_close(P.inOut->outBAMfileUnsorted);
     };
+    if (P.inOut->outBAMfileUnsortedSoloTmp.is_open())
+    {
+        P.inOut->outBAMfileUnsortedSoloTmp.flush();
+        P.inOut->outBAMfileUnsortedSoloTmp.close();
+    };
     if (P.inOut->outQuantBAMfile != NULL)
     {
         bgzf_flush(P.inOut->outQuantBAMfile);
@@ -254,6 +260,33 @@ int main(int argInN, char *argIn[])
     // solo counts
     Solo soloMain(RAchunk, P, *RAchunk[0]->chunkTr);
     soloMain.processAndOutput();
+
+    // Two-pass unsorted CB/UB tag injection - Pass 2
+    if (P.outBAMunsortedUseSoloTmp) {
+        // Assertion: tmp filename should be set when using solo tmp mode
+        if (P.outBAMfileUnsortedSoloTmpName == "") {
+            ostringstream errOut;
+            errOut << "EXITING because of fatal INTERNAL ERROR: outBAMunsortedUseSoloTmp is true but outBAMfileUnsortedSoloTmpName is empty\n";
+            errOut << "SOLUTION: this is a programming error, please report this bug\n";
+            exitWithError(errOut.str(), std::cerr, P.inOut->logMain, EXIT_CODE_PARAMETER, P);
+        }
+        P.inOut->logMain << timeMonthDayTime() << " ..... starting pass 2: adding CB/UB tags to unsorted BAM\n" << flush;
+        
+        try {
+            BAMunsortedAddSoloTags(P.outBAMfileUnsortedSoloTmpName, 
+                                   P.outBAMfileUnsortedName, 
+                                   P, 
+                                   *genomeMain.genomeOut.g, 
+                                   soloMain);
+            
+            P.inOut->logMain << timeMonthDayTime() << " ..... finished pass 2: CB/UB tags added to unsorted BAM\n" << flush;
+        } catch (const std::exception& e) {
+            ostringstream errOut;
+            errOut << "EXITING because of fatal ERROR in pass 2 (CB/UB tag injection): " << e.what() << "\n";
+            errOut << "SOLUTION: check the tmp file: " << P.outBAMfileUnsortedSoloTmpName << " for debugging\n";
+            exitWithError(errOut.str(), std::cerr, P.inOut->logMain, EXIT_CODE_PARAMETER, P);
+        }
+    }
 
     if (P.quant.geCount.yes)
     { // output gene quantifications

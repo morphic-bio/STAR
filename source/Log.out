@@ -1,0 +1,23 @@
+STAR version=2.7.11b
+STAR compilation time,server,dir=2025-09-23T20:20:10+00:00 :/mnt/pikachu/STAR/source
+STAR git: On branch master ; commit b1edc1208d91a53bf40ebae8669f71d50b994851 ; diff files: source/InOutStreams.h source/Parameters.cpp source/Parameters.h source/ParametersSolo.cpp source/ParametersSolo.h source/ReadAlign.h source/ReadAlignChunk.cpp source/ReadAlignChunk.h source/ReadAlignChunk_processChunks.cpp source/parametersDefault source/samHeaders.cpp 
+##### Command Line:
+./STAR --soloAddTagsToUnsorted invalid
+##### Initial USER parameters from Command Line:
+###### All USER parameters from Command Line:
+soloAddTagsToUnsorted         invalid     ~RE-DEFINED
+##### Finished reading parameters from all sources
+
+##### Final user re-defined parameters-----------------:
+soloAddTagsToUnsorted             invalid
+
+-------------------------------
+##### Final effective command line:
+./STAR   --soloAddTagsToUnsorted invalid
+----------------------------------------
+
+Number of fastq files for each mate = 1
+
+EXITING because of fatal input ERROR: could not open readFilesIn=Read1
+
+Sep 23 20:25:54 ...... FATAL ERROR, exiting

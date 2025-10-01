@@ -1,0 +1,109 @@
+# Plan: Align Tag Table with BAM Records
+
+## Objective
+Make `--soloWriteTagTable` write one sidecar record per BAM alignment, keyed by a stable `bam_record_index`, with QNAME populated. The output must stay in lockstep with how the unsorted BAM is streamed, regardless of mates or multimappers.
+
+## High-level tasks
+1. Track BAM records while STAR writes alignments.
+2. Capture QNAME, mate, multimap index, and CB/UB for each record at write time.
+3. Stream tag-table rows using the captured data.
+4. Drop the legacy per-read export code.
+
+---
+
+## 1. Instrument alignment write path
+1.1 Introduce shared counter
+- File: `source/GlobalVariables.h`
+  - Add declaration: `extern std::atomic<uint64_t> g_bamRecordIndex;`
+- File: `source/GlobalVariables.cpp`
+  - Define and initialize: `std::atomic<uint64_t> g_bamRecordIndex{0};`
+
+1.2 Reset at run start
+- File: `source/Parameters.cpp`
+  - After `P.iReadAll = 0;` (existing line ~478), set `g_bamRecordIndex = 0;`
+
+1.3 Surface counter to threads
+- File: `source/ReadAlignChunk.cpp`
+  - Include `GlobalVariables.h`.
+  - In constructor, store pointer: `bamRecordIndexPtr = &g_bamRecordIndex;` (add member in header).
+- File: `source/ReadAlign.h`
+  - Add `std::atomic<uint64_t>* bamRecordIndexPtr;`
+  - Initialize to `nullptr` in ctor.
+- File: `source/ReadAlign.cpp`
+  - Assign: `bamRecordIndexPtr = &g_bamRecordIndex;`
+
+1.4 Increment counter per alignment
+- File: `source/ReadAlign_outputAlignments.cpp`
+  - Just before each call to `outBAMunsorted->unsortedOneAlign` or `outBAMsoloTmp->unsortedOneAlign`, increment local `uint64_t recordIdx = (*bamRecordIndexPtr)++;`
+  - Pass `recordIdx` along with alignment data (see section 2).
+- File: `source/ChimericAlign_chimericBAMoutput.cpp`
+  - Apply same increment before writing chimeric outputs.
+
+---
+
+## 2. Capture alignment metadata
+2.1 Extend writer interface
+- File: `source/BAMoutput.h`
+  - Update `unsortedOneAlign` signature to accept an extra struct reference containing:
+    ```cpp
+    struct BAMRecordMeta {
+        uint64_t recordIndex;
+        uint64_t iReadAll;
+        uint32_t mate;      // 0 or 1
+        uint32_t alignIdx;  // multi-mapper ordinal
+        const char* qname;  // pointer or nullptr
+    };
+    ```
+  - Add overload that accepts metadata.
+- Update `source/BAMoutput.cpp`, `BAMoutputSoloTmp.cpp` accordingly.
+
+2.2 Populate metadata in write call sites
+- File: `source/ReadAlign_outputAlignments.cpp`
+  - When looping over mates (`for (uint imate=0; imate<P.readNmates; imate++)`):
+    - Determine mate index (`mate = imate`).
+    - Determine `alignIdx` from existing loop counters (`iTr`, etc.).
+    - Extract QNAME: use `readNameMates[imate]` or fallback to `Read0[imate].name` if available.
+    - Fill `BAMRecordMeta meta{recordIdx, iReadAll, mate, alignIdx, qnamePtr};`
+    - Pass `meta` to `unsortedOneAlign`.
+- File: `source/ReadAlign_outputAlignments.cpp` (unmapped branches) and `ChimericAlign_chimericBAMoutput.cpp`: repeat the same steps.
+
+2.3 Store metadata for tag table
+- Modify `BAMoutput` / `BAMoutputSoloTmp` constructors to accept a pointer to a shared vector (new class `BAMTagBuffer`):
+  - `BAMTagBuffer` collects `BAMRecordMeta` entries along with CB/UB placeholders (initially `"-"`).
+  - Use thread-safe push (mutex or lock-free queue) to append from multiple threads.
+
+---
+
+## 3. Integrate CB/UB lookup and stream table
+3.1 Extend `BAMTagBuffer`
+- Structure fields: `recordIndex`, `iReadAll`, `mate`, `alignIdx`, `std::string qname`, `std::string cb`, `std::string ub`, `std::string status`.
+- Provide `append(meta)` method and `finalizeTag(iReadAll, cb, ub)` for Solo to fill later.
+
+3.2 Hook Solo collapse results
+- File: `source/SoloFeature_collapseUMIall.cpp`
+  - After `readInfo[iRead].cb`/`umi` are finalized, call `BAMTagBuffer::finalizeTag(iReadAll, cbStr, ubStr)` to fill CB/UB values for all alignments sharing that read index.
+
+3.3 Stream tag table at end
+- Replace existing `SoloFeature::writeTagTableIfRequested` implementation with:
+  - Iterate `BAMTagBuffer` entries in recordIndex order (buffer should already be appended in order of emission).
+  - Write each entry: `recordIndex`, `iReadAll`, `mate`, `alignIdx`, `qname`, `cb`, `ub`, `status` (status computed from cb/ub).
+  - Ensure `qname` falls back to `-` only when blank.
+
+3.4 Clear buffer after writing to free memory.
+
+---
+
+## 4. Remove obsolete code
+4.1 Delete per-read dumping logic in `SoloFeature_writeTagTable.cpp` (reimplement per steps above).
+4.2 Remove unused `readNames` vector from `SoloFeature` once QNAME is captured at write time.
+4.3 Update documentation: `docs/two_pass_unsorted_usage.md`, `docs/two_pass_unsorted_tech.md` explaining the new index alignment.
+
+---
+
+## Verification checklist
+- [ ] `make STAR` succeeds (update Makefile for new sources if needed).
+- [ ] `emit_test.sh` passes: sorted join on `bam_record_index`, CB/UB columns match.
+- [ ] `integration_test.sh` remains green.
+- [ ] Output `Aligned.out.cb_ub.tsv` contains one row per BAM record and meaningful QNAME.
+- [ ] Memory usage acceptable (clear buffers when done).
+

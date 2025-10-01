@@ -36,6 +36,8 @@ void Parameters::samAttributes(){//everything related to SAM attributes
     outSAMattrPresent.sS=false;    
     outSAMattrPresent.sQ=false;
     outSAMattrPresent.sF=false;
+    outSAMattrPresent.ZG=false;
+    outSAMattrPresent.ZX=false;
 
     outSAMattrPresent.cN=false;
     
@@ -176,6 +178,14 @@ void Parameters::samAttributes(){//everything related to SAM attributes
                 inOut->logMain << "WARNING --outSAMattributes contains XS, therefore STAR will use --outSAMstrandField intronMotif" <<endl;
                 outSAMstrandField.type=1;
             };
+        } else if (vAttr1.at(ii)== "ZG") {
+            outSAMattrOrder.push_back(ATTR_ZG);
+            outSAMattrOrderQuant.push_back(ATTR_ZG);
+            outSAMattrPresent.ZG=true;
+        } else if (vAttr1.at(ii)== "ZX") {
+            outSAMattrOrder.push_back(ATTR_ZX);
+            outSAMattrOrderQuant.push_back(ATTR_ZX);
+            outSAMattrPresent.ZX=true;
         } else {
             ostringstream errOut;
             errOut <<"EXITING because of FATAL INPUT ERROR: unknown/unimplemented SAM atrribute (tag): "<<vAttr1.at(ii) <<"\n";
@@ -240,8 +250,10 @@ void Parameters::samAttributes(){//everything related to SAM attributes
     samAttrRequiresBAM(outSAMattrPresent.vW, "vW");
     samAttrRequiresBAM(outSAMattrPresent.GX, "GX");
     samAttrRequiresBAM(outSAMattrPresent.GN, "GN");
+    samAttrRequiresBAM(outSAMattrPresent.ZG, "ZG");
+    samAttrRequiresBAM(outSAMattrPresent.ZX, "ZX");
     
-    if (outSAMattrPresent.GX || outSAMattrPresent.GN) {//in case GX/GN were requested without Solo
+    if (outSAMattrPresent.GX || outSAMattrPresent.GN || outSAMattrPresent.ZG || outSAMattrPresent.ZX) {//in case GX/GN/ZG/ZX were requested without Solo
         quant.gene.yes = true;
         quant.yes = true;
         pSolo.samAttrFeature = SoloFeatureTypes::Gene;//TODO: this is a hack... need to perform read annotations independent of Solo

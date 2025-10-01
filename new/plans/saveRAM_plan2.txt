@@ -1,0 +1,108 @@
+# saveRAM Plan v2
+
+## Goal
+Cut RAM usage for CB/UB tag table generation by:
+1. Compacting per-alignment storage (pooled qnames, integer CB/UB, status enum).
+2. Deduplicating data across alignments of the same read via a shared read-group structure keyed by `iReadAll`.
+
+## Prerequisites
+- Repo cloned, dependencies installed, able to build STAR (`make STAR`).
+- Local tests (`integration_test.sh`, `emit_test.sh`) runnable.
+- Baseline memory measurement available or obtainable via `/usr/bin/time -v`.
+
+## Phase 0 – Snapshot
+1. `git status -sb`.
+2. Optional: build current binaries and capture baseline RAM during a representative run.
+
+## Phase 1 – Compact BAMTagEntry
+1. Edit `source/BAMTagBuffer.h`:
+   - Replace `std::string qname/cb/ub/status` with compact fields:
+     * `uint32_t qnameId` (0 => "-").
+     * `uint32_t cbIdx` (`UINT32_MAX` => none).
+     * `uint32_t umiPacked` (`UINT32_MAX` => none).
+     * `uint8_t statusCode` (0=OK,1=NO_CB,2=NO_UMI,3=NO_CB_UMI).
+     * Keep `recordIndex`, `iReadAll`, `mate`, `alignIdx`.
+   - Declare helper types inside `BAMTagBuffer`:
+     * `QnamePool` owning a vector + unordered_map to intern QNAME strings.
+     * `static const char* statusToStr(uint8_t)` or equivalent lookup.
+     * Helpers `packUmi(const std::string&, uint32_t umiLen)` and inverse.
+2. Update constructor/destructor to init/clear the pool.
+3. Adjust `append()` (`source/BAMTagBuffer.cpp`):
+   - Lock mutex, intern qname (`qnameId`).
+   - Store scalar metadata and zero-out CB/UB/status until finalized.
+4. Adjust `finalizeTag()` signature to accept CB index (`uint32_t`) and packed UMI (`uint32_t`).
+   - Update implementation to assign fields and compute status code without strings.
+5. Update `reserveReadCapacity()` and `ensureBucketSize()` as needed; logic should remain.
+6. Update `writeTagTable()` to expand compact data when emitting TSV:
+   - Fetch QNAME via pool.
+   - Convert CB index into whitelist string (use `pSolo.cbWLstr`).
+   - Convert `umiPacked` back to string; handle overflow (log and emit "-").
+   - Map status code to text using helper.
+7. Update `clear()` to reset pool and shared arrays.
+
+## Phase 2 – Propagate Compact Types
+1. Modify all callers of `finalizeTag()` to pass new args:
+   - In `SoloFeature::finalizeTagTableFromReadInfo()` (`source/SoloFeature_collapseUMIall.cpp`):
+     * Use `readInfo[iRead].cb` directly (convert `(uint64)-1` to `UINT32_MAX`).
+     * Pack UMI using helper (convert `(uint32)-1` => `UINT32_MAX`).
+   - Search repo (`rg "finalizeTag("`) and update each site.
+2. Expose UMI packing helper if needed (e.g., static inline in header).
+3. Ensure per-thread access remains thread-safe; use mutex when touching pool.
+
+## Phase 3 – Introduce ReadGroup Deduplication
+### Data Layout
+1. Define `struct ReadGroup { uint32_t qnameId; uint32_t cbIdx; uint32_t umiPacked; uint8_t statusCode; std::vector<size_t> entryIdx; };` inside `BAMTagBuffer`.
+2. Replace `std::vector<std::vector<size_t>> readBuckets` with:
+   - `std::vector<ReadGroup> readGroups;` if `iReadAll` values are dense.
+   - `std::unordered_map<uint64_t, ReadGroup>` if sparse; choose based on profiling (default to vector with auto-resize since `iReadAll` increments).
+3. Keep `entries` as lean alignment-level structs containing only data unique per alignment: `recordIndex`, `mate`, `alignIdx`, plus pointer/back-reference to owning read group (e.g., group index).
+4. Update class comments to reflect new layout.
+
+### Constructor Adjustments
+1. Initialize `readGroups` with small size (e.g., 1024) and default read-group objects with sentinel values.
+
+### Update append()
+1. After creating compact entry, ensure read group exists for `meta.iReadAll`:
+   - Call helper `getOrCreateGroup(iReadAll, qnameId)`.
+   - If new group, set `qnameId`, mark `cbIdx/umiPacked/statusCode` to sentinel defaults, clear `entryIdx`.
+2. Store entry in `entries` with `groupIndex` (or pointer).
+3. Append new entry index to `readGroups[groupIndex].entryIdx`.
+
+### Update finalizeTag()
+1. Locate group by `iReadAll`.
+2. Assign `cbIdx`, `umiPacked`, recompute `statusCode` once for the whole group.
+3. Remove per-entry loops; group-level data now shared.
+
+### Update writeTagTable()
+1. Iterate over `entries` in desired output order (e.g., by `recordIndex`).
+2. For each entry, fetch owning group’s shared fields when writing columns.
+3. Optionally sort `entries` first to preserve original ordering.
+
+### Update clear()
+1. Reset `entries`, `readGroups`, and pool.
+
+## Phase 4 – Helper Implementations
+1. Implement `packUmiString(const std::string&, uint32_t umiLen)` using 2-bit encoding; validate characters (log + sentinel on invalid base).
+2. Provide `packUmiFromUint(uint32_t umiValue, uint32_t umiLen)` if readInfo already stores 2-bit compressed form; otherwise update producer to use packed format earlier.
+3. Implement `unpackUmi(uint32_t packed, uint32_t umiLen)` (return `std::string`).
+4. Ensure these helpers are accessible where needed (maybe in new `UmiCodec.h` to avoid duplication).
+
+## Phase 5 – Thread Safety & Performance Checks
+1. Confirm every mutation to pool/readGroups/entries is under `entriesMutex` (or a more granular mutex if required for throughput).
+2. Optionally benchmark `append()` for contention; if needed, split mutex into two (pool vs entries) or use lock-free ID caching for qnames.
+
+## Phase 6 – Tests and Validation
+1. Rebuild (`make STAR`).
+2. Run `integration_test.sh` and `emit_test.sh`.
+3. Run specific scenario that produces tag table; diff output vs baseline to ensure identical text.
+4. Measure RAM during a representative run; compare to baseline noted in Phase 0.
+
+## Phase 7 – Wrap-up
+1. `git status -sb`.
+2. Document before/after metrics and any follow-up ideas (e.g., further compaction, removing unused columns).
+3. Leave both `saveRAM_plan.txt` and `saveRAM_plan2.txt` until work completes.
+
+## Notes
+- If UMIs can exceed 16 bases, detect and fall back to storing a hash plus overflow map.
+- Consider reusing the read-group idea for future tag types (e.g., multi-tag expansion).
+- Ensure TSV writer still emits strings exactly as original; tests should catch regressions.

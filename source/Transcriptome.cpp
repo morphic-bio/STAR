@@ -4,6 +4,8 @@
 #include "ErrorWarning.h"
 #include "serviceFuns.cpp"
 
+#include <unordered_map>
+
 Transcriptome::Transcriptome (Parameters &Pin) : P(Pin){
 
     if (!P.quant.yes)
@@ -28,6 +30,37 @@ Transcriptome::Transcriptome (Parameters &Pin) : P(Pin){
         stream1 >> geID[ii] >> geName[ii] >> geBiotype[ii];
     };
     geStream.close();
+
+    // Pre-compute canonical gene IDs for ZG tags. Some references include placeholder
+    // entries (e.g. "MissingGeneType") where gene_id matches gene_name. Resolve those
+    // back to the canonical ID so ZG only emits stable identifiers.
+    geIDCanonical = geID;
+    std::unordered_map<string, string> canonicalByName;
+    canonicalByName.reserve(nGe);
+
+    for (uint ii=0; ii<nGe; ii++) {
+        const string &name = geName[ii];
+        const string &biotype = geBiotype[ii];
+        if (!name.empty() && biotype != "MissingGeneType") {
+            // Keep the first canonical ID we encounter for each gene symbol.
+            if (canonicalByName.find(name) == canonicalByName.end()) {
+                canonicalByName.emplace(name, geID[ii]);
+            }
+        }
+    }
+
+    if (!canonicalByName.empty()) {
+        for (uint ii=0; ii<nGe; ii++) {
+            const string &name = geName[ii];
+            const string &biotype = geBiotype[ii];
+            if (biotype == "MissingGeneType" && !name.empty()) {
+                auto it = canonicalByName.find(name);
+                if (it != canonicalByName.end()) {
+                    geIDCanonical[ii] = it->second;
+                }
+            }
+        }
+    }
 
     if ( P.quant.trSAM.yes || P.quant.gene.yes || P.quant.geneFull_Ex50pAS.yes ) {//load exon-transcript structures
         //load tr and ex info

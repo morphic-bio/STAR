@@ -1,4 +1,5 @@
 #include "ParametersSolo.h"
+#include "BAMTagBuffer.h"
 #include "Parameters.h"
 #include "ErrorWarning.h"
 #include "streamFuns.h"
@@ -6,6 +7,15 @@
 #include "serviceFuns.cpp"
 
 #include <stdlib.h>
+#include <algorithm>
+
+ParametersSolo::~ParametersSolo() {
+    // Clean up BAMTagBuffer if it was created
+    if (bamTagBuffer) {
+        delete bamTagBuffer;
+        bamTagBuffer = nullptr;
+    }
+}
 
 void ParametersSolo::initialize(Parameters *pPin)
 {
@@ -21,6 +31,38 @@ void ParametersSolo::initialize(Parameters *pPin)
     
     //constants - may turn into parameters in the future
     redistrReadsNfiles = 3*pP->runThreadN;
+    
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////--soloAddTagsToUnsorted
+    if (addTagsToUnsortedStr=="yes") {
+        addTagsToUnsorted = true;
+    } else if (addTagsToUnsortedStr=="no") {
+        addTagsToUnsorted = false;
+    } else {
+        ostringstream errOut;
+        errOut << "EXITING because of fatal PARAMETERS error: unrecognized option in --soloAddTagsToUnsorted="<<addTagsToUnsortedStr<<"\n";
+        errOut << "SOLUTION: use allowed option: yes OR no\n";
+        exitWithError(errOut.str(),std::cerr, pP->inOut->logMain, EXIT_CODE_PARAMETER, *pP);
+    };
+    
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////--soloWriteTagTable
+    string writeTagTableLower = writeTagTableStr;
+    transform(writeTagTableLower.begin(), writeTagTableLower.end(), writeTagTableLower.begin(), ::tolower);
+    
+    if (writeTagTableLower == "none") {
+        writeTagTableEnabled = false;
+        writeTagTablePath = "";
+    } else if (writeTagTableLower == "default") {
+        writeTagTableEnabled = true;
+        writeTagTablePath = pP->outFileNamePrefix + "Aligned.out.cb_ub.bin";
+        bamTagBuffer = new BAMTagBuffer();
+    } else {
+        writeTagTableEnabled = true;
+        // For custom paths, use as-is (relative paths will be resolved against working directory)
+        writeTagTablePath = writeTagTableStr;
+        bamTagBuffer = new BAMTagBuffer();
+    };
     
     //////////////////////////////////////////////////////////////////////////////////////////////////////
     ///////////////////////////////--soloType
@@ -404,11 +446,16 @@ void ParametersSolo::initialize(Parameters *pPin)
     samAttrYes=false;
     if ( (pP->outSAMattrPresent.CB || pP->outSAMattrPresent.UB) && type!=SoloTypes::CB_samTagOut) {
         samAttrYes=true;
-        if (!pP->outBAMcoord) {
+        if (!pP->outBAMcoord && !(pP->outBAMunsorted && addTagsToUnsorted) && !writeTagTableEnabled) {
             ostringstream errOut;
-            errOut << "EXITING because of fatal PARAMETERS error: CB and/or UB attributes in --outSAMattributes can only be output in the sorted BAM file.\n";
-            errOut << "SOLUTION: re-run STAR with --outSAMtype BAM SortedByCoordinate ...\n";
+            errOut << "EXITING because of fatal PARAMETERS error: CB and/or UB attributes in --outSAMattributes can only be output in the sorted BAM file, unsorted BAM with --soloAddTagsToUnsorted yes, or with --soloWriteTagTable enabled.\n";
+            errOut << "SOLUTION: re-run STAR with --outSAMtype BAM SortedByCoordinate ... OR --outSAMtype BAM Unsorted --soloAddTagsToUnsorted yes OR --soloWriteTagTable Default\n";
             exitWithError(errOut.str(),std::cerr, pP->inOut->logMain, EXIT_CODE_PARAMETER, *pP);
+        };
+        
+        // Add a warning when both flags are off but CB/UB attributes are requested
+        if (!addTagsToUnsorted && !writeTagTableEnabled && pP->outBAMunsorted) {
+            pP->inOut->logMain << "WARNING: CB/UB attributes are requested but neither --soloAddTagsToUnsorted nor --soloWriteTagTable is enabled. Tags will be absent from BAM and no sidecar table will be produced.\n";
         };
     } else if ( pP->outSAMattrPresent.UB && type==SoloTypes::CB_samTagOut) {
         exitWithError("EXITING because of fatal PARAMETERS error: UB attribute (corrected UMI) in --outSAMattributes cannot be used with --soloType CB_samTagOut \n" \
@@ -433,6 +480,20 @@ void ParametersSolo::initialize(Parameters *pPin)
         };
         readInfoYes[samAttrFeature]=true;
     };
+    
+    // Ensure readInfo is enabled when writeTagTable is requested
+    if (writeTagTableEnabled) {
+        if (   samAttrFeature == SoloFeatureTypes::Gene || samAttrFeature == SoloFeatureTypes::GeneFull ||
+               samAttrFeature == SoloFeatureTypes::GeneFull_Ex50pAS || samAttrFeature == SoloFeatureTypes::GeneFull_ExonOverIntron ) {
+            readInfoYes[samAttrFeature] = true;
+        } else {
+            ostringstream errOut;
+            errOut << "EXITING because of fatal PARAMETERS error: --soloWriteTagTable requires --soloFeatures Gene OR/AND GeneFull OR/AND GeneFull_Ex50pAS OR/AND GeneFull_ExonOverIntron.\n";
+            errOut << "SOLUTION: re-run STAR adding Gene AND/OR GeneFull OR/AND GeneFull_Ex50pAS OR/AND GeneFull_ExonOverIntron to --soloFeatures\n";
+            exitWithError(errOut.str(),std::cerr, pP->inOut->logMain, EXIT_CODE_PARAMETER, *pP);
+        };
+    };
+    
     readIndexYes = readInfoYes;
 
     /////////////////////////////////////////////////////////////////// readFlag output

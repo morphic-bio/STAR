@@ -1,4 +1,5 @@
 #include "ReadAlignChunk.h"
+#include "BAMTagBuffer.h"
 #include <pthread.h>
 #include "ErrorWarning.h"
 
@@ -40,11 +41,34 @@ ReadAlignChunk::ReadAlignChunk(Parameters& Pin, Genome &genomeIn, Transcriptome 
     };
 
     if (P.outBAMunsorted) {
-        chunkOutBAMunsorted = new BAMoutput (P.inOut->outBAMfileUnsorted, P);
-        RA->outBAMunsorted = chunkOutBAMunsorted;
+        if (P.outBAMunsortedUseSoloTmp) {
+            // Two-pass mode: use solo tmp writer with shared stream
+            if (P.pSolo.writeTagTableEnabled) {
+                chunkOutBAMsoloTmp = new BAMoutputSoloTmp(&P.inOut->outBAMfileUnsortedSoloTmp, P, P.pSolo.bamTagBuffer);
+            } else {
+                chunkOutBAMsoloTmp = new BAMoutputSoloTmp(&P.inOut->outBAMfileUnsortedSoloTmp, P);
+            }
+            RA->outBAMsoloTmp = chunkOutBAMsoloTmp;
+            chunkOutBAMunsorted = NULL;
+            RA->outBAMunsorted = NULL;
+        } else if (P.pSolo.writeTagTableEnabled) {
+            // Tag table export mode: use BAM output with tag buffer
+            chunkOutBAMunsorted = new BAMoutput (P.inOut->outBAMfileUnsorted, P, P.pSolo.bamTagBuffer);
+            RA->outBAMunsorted = chunkOutBAMunsorted;
+            chunkOutBAMsoloTmp = NULL;
+            RA->outBAMsoloTmp = NULL;
+        } else {
+            // Legacy mode: use regular BAM output
+            chunkOutBAMunsorted = new BAMoutput (P.inOut->outBAMfileUnsorted, P);
+            RA->outBAMunsorted = chunkOutBAMunsorted;
+            chunkOutBAMsoloTmp = NULL;
+            RA->outBAMsoloTmp = NULL;
+        }
     } else {
         chunkOutBAMunsorted=NULL;
         RA->outBAMunsorted=NULL;
+        chunkOutBAMsoloTmp=NULL;
+        RA->outBAMsoloTmp=NULL;
     };
 
     if (P.outBAMcoord) {

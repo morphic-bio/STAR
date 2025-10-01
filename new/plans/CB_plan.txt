@@ -1,0 +1,241 @@
+# STARsolo: Two‑Pass Unsorted CB/UB Tag Injection (Design + Runbook)
+
+Author: <your name>
+Last updated: 2025-03-16
+
+## Summary
+
+This document specifies an implementation plan to add CB/UB (corrected cell barcode/UMI) tags to an UNSORTED BAM using a two-pass pipeline, avoiding the heavy disk and time costs of coordinate sorting. The approach preserves STARsolo’s correction/dedup semantics by performing correction after aggregation, then doing a linear second pass over an intermediate file to inject tags into the final unsorted BAM while reusing the existing `SoloFeature::addBAMtags` logic.
+
+This is a developer runbook that an engineer or AI agent can follow end‑to‑end, with testing at each stage.
+
+## Background
+
+- Today, STARsolo emits raw tags (CR/UR, CY/UY, GX/GN) inside `ReadAlign::alignBAM`, but defers CB/UB (corrected) tags to the coordinate-sort stage where `SoloFeature::addBAMtags` is called:
+  - `ReadAlign::alignBAM` skips `CB`/`UB` when `soloRead->readBar->cbSeqCorrected` is empty (`source/ReadAlign_alignBAM.cpp:452`).
+  - `SoloFeature::addBAMtags` reads the packed `iRead` trailer and appends CB/UB (`source/SoloFeature_addBAMtags.cpp:5`).
+  - Trailers are appended only in the coordinate-sorting spill files (`source/BAMoutput.cpp:87` for writes, `source/BAMbinSortUnmapped.cpp:29` / `source/BAMbinSortByCoordinate.cpp:48` for reads).
+  - Docs and parameter validation currently require sorted BAM for CB/UB (`docs/STARsolo.md`, `source/ParametersSolo.cpp:383`).
+- Unsorted BAMs are streamed directly to `BGZF*` during mapping via `BAMoutput::unsortedOneAlign`, then the shared handle is closed before `Solo::processAndOutput()` runs (`source/ReadAlignChunk.cpp:43`, `source/STAR.cpp:214`). This means unsorted output is finalized before `readInfo` is populated inside `SoloFeature::countCBgeneUMI` (`source/SoloFeature_countCBgeneUMI.cpp:12`).
+
+## Goals
+
+- Emit final unsorted BAM with corrected CB/UB tags, without coordinate sorting.
+- Preserve STARsolo’s exact CB/UMI correction and dedup semantics.
+- Minimize temp disk and extra CPU relative to coordinate sorting.
+- Keep changes localized and low‑risk.
+
+## Non‑Goals
+
+- Changing STARsolo correction/dedup algorithms.
+- Replacing or removing the existing coordinate‑sorted path.
+- Streaming single‑pass correction (would compromise semantics).
+
+## User‑Visible Changes
+
+- New CLI option (name TBD, proposal below) to enable two‑pass unsorted CB/UB injection:
+  - Proposed: `--soloAddTagsToUnsorted` [yes|no], default: `no`.
+- When `--soloAddTagsToUnsorted yes` and `--outSAMtype BAM Unsorted`:
+  - Allow inclusion of CB/UB in `--outSAMattributes` without requiring coordinate sorting.
+  - STAR:
+    1) Writes an intermediate unsorted alignment file in an internal temporary format.
+    2) Completes Solo aggregation/correction.
+    3) Replays the intermediate file and injects CB/UB tags to produce the final unsorted BAM.
+- File outputs:
+  - Final unsorted BAM (as today’s `Aligned.out.bam` or equivalent naming).
+  - Temporary intermediate file in the run directory (auto‑cleaned on success).
+
+## High‑Level Design
+
+Two‑pass unsorted pipeline:
+
+1) Pass 1: Unsorted write to an intermediate file augmented with an internal per-record read index (iread).
+   - Hook the existing unsorted write path in `ReadAlign::writeSAM` so that when the new flag is on we redirect `outBAMunsorted->unsortedOneAlign` calls to a solo-aware writer that appends `iReadAll` (`ReadAlign::writeSAM`, `source/ReadAlign_outputAlignments.cpp:186`).
+   - Format mimics the existing sort bin format (avoids htslib decoding/encoding in pass 2 and reuses existing code paths):
+     - For each record: write `int32 block_size`, then `block_size` bytes of the BAM record, then append an internal 64-bit trailer containing `iread` (packed exactly as the sorted path so `addBAMtags` can reuse the existing extraction logic).
+   - Header is buffered or written to a temp header file for pass 2; skip writing a BAM header to the intermediate payload so pass 2 retains responsibility for producing the final BAM stream.
+
+2) Solo feature processing:
+   - Exactly as today: compute CB/UMI corrections and fill `SoloFeature::readInfo[iread]`.
+
+3) Pass 2: Linear replay and tag injection:
+   - Iterate the intermediate file record‑by‑record (same read loop pattern as in `BAMbinSortUnmapped`).
+   - For each record:
+     - Call `SoloFeature::addBAMtags(bam0, size0, bam1)` to append CB/UB (using `readInfo[iread]` internally).
+     - Write the resulting record to a BGZF output stream as a valid BAM (update `block_size` per `addBAMtags`).
+   - Write the proper BAM header before records.
+   - Cleanup the intermediate file.
+
+Rationale:
+- Reuses `SoloFeature::addBAMtags` unchanged (low risk).
+- Reuses existing internal record layout conventions (including how `iread` is packed/read).
+- Avoids the complexity of reading valid BAM via htslib just to retrieve `iread`.
+
+## Detailed Implementation Plan
+
+### Step 0 – Parameters and gating
+
+- Add CLI knob `--soloAddTagsToUnsorted` with default `no` (`source/ParametersSolo.h`, `source/ParametersSolo.cpp`). Store it as `pSolo.addTagsToUnsorted`.
+- Relax the existing fatal check in `ParametersSolo::initialize` so CB/UB attributes are allowed when `outBAMunsorted && pSolo.addTagsToUnsorted` (`source/ParametersSolo.cpp:383`). Keep the error for all other combinations (e.g., CB/UB requested with neither sorted BAM nor the new flag).
+- Update help text and defaults in `parametersDefault` so the option shows up in `STAR --help`.
+
+### Step 1 – Output plumbing and header ownership
+
+- Extend `Parameters`/`InOutStreams` to carry a path and handle for the solo tmp container, e.g. `string outBAMfileUnsortedSoloTmpName` plus an `ofstream* outBAMfileUnsortedSoloTmp` (`source/Parameters.h`, `source/InOutStreams.h` and their .cpp counterparts).
+- When `outBAMunsorted` is requested:
+  - If `pSolo.addTagsToUnsorted` is `false`, keep the current behaviour: open `inOut->outBAMfileUnsorted` with `bgzf_open` as today.
+  - If `pSolo.addTagsToUnsorted` is `true`, skip opening the BGZF handle here. Instead, generate a deterministic tmp path like `<outFileTmp>/Aligned.out.unsorted.solo.tmp`, create the file (truncate if it exists), and store the path/stream in `InOutStreams`. Leave `outBAMfileUnsorted` as `NULL` so downstream code knows no first-pass BAM writer is available.
+- Guard header emission in `samHeaders` (`source/samHeaders.cpp`): only call `outBAMwriteHeader` for unsorted BAM when `outBAMfileUnsorted` is non-null. Pass the header string back via `P.samHeader` so pass 2 can reuse it.
+- Update teardown in `STAR.cpp` so the code that flushes/closes `outBAMfileUnsorted` runs only when the handle exists (no-op in solo tmp mode).
+
+### Step 2 – Pass 1 writer: capture unsorted alignments with iRead trailers
+
+- Introduce a lightweight writer that mirrors `BAMoutput::unsortedOneAlign` but targets the solo tmp file and appends `iReadAll` to each record. Either:
+  - add a new class `BAMoutputSoloTmp` (`source/BAMoutputSoloTmp.h/.cpp`) constructed with the tmp stream and `Parameters`, or
+  - extend `BAMoutput` to host an alternate sink selected via a constructor flag. The important part is to avoid perturbing the existing unsorted/BGZF code path when the new mode is off.
+- Data layout per record: `[uint32_t block_size_with_len][block_size_with_len bytes][uint64_t trailer]` where `trailer = ((uint64) iReadAll) << 32`. This matches the expectation inside `SoloFeature::addBAMtags`.
+- Buffer writes exactly like `BAMoutput::unsortedOneAlign`: reuse `g_threadChunks.mutexOutSAM` around flushes so concurrent chunks do not interleave writes. Implement a `flush()` and `close()` method so `ReadAlignChunk_processChunks.cpp:258` can call it where we currently flush the unsorted BGZF.
+- Wire the new writer through the mapping code:
+  - In `ReadAlignChunk` constructor (`source/ReadAlignChunk.cpp:35`), instantiate `BAMoutputSoloTmp` when `P.outBAMunsorted && P.pSolo.addTagsToUnsorted`, set a new pointer on `ReadAlign` (e.g. `outBAMsoloTmp`). Keep `outBAMunsorted` as `nullptr` in this mode so existing callers short-circuit.
+  - In `ReadAlign::writeSAM` and other unsorted sinks (`source/ReadAlign_outputAlignments.cpp:186`, `source/ChimericAlign_chimericBAMoutput.cpp:101`, transcriptome quant flow if needed) branch on the new flag: send `outBAMoneAlign[...]`, its size, and `(iReadAll<<32)` into the solo tmp writer, skipping the BGZF path.
+  - Ensure unmapped read handling still calls the tmp writer so every record emitted during pass 1 is captured.
+- Close the tmp stream at the end of each thread (`ReadAlignChunk_processChunks.cpp:258`) and once at program shutdown if it is still open.
+
+### Step 3 – Pass 2 injector and final BAM
+
+- Add `source/BAMunsortedAddSoloTags.h/.cpp` that implement:
+```c++
+void BAMunsortedAddSoloTags(const std::string &tmpPath,
+                            const std::string &outBamPath,
+                            Parameters &P,
+                            Genome &genome,
+                            Solo &solo);
+```
+- Implementation outline (modelled on `BAMbinSortUnmapped.cpp`):
+  1. Open the tmp file via `std::ifstream` (binary).
+  2. Open the final unsorted BAM with `bgzf_open(outBamPath.c_str(), ("w"+to_string(P.outBAMcompression)).c_str())` and immediately emit the header with `outBAMwriteHeader(bgzfOut, P.samHeader, genome.chrNameAll, genome.chrLengthAll)`.
+  3. Allocate two scratch buffers: `bam0` with room for a full record plus trailer (`BAMoutput_oneAlignMaxBytes+sizeof(uint64)`), and `bam1` as the workspace for `addBAMtags`.
+  4. Loop until EOF: read `uint32 size_with_len`; read that many bytes into `bam0`; read the `uint64 trailer`; set `uint32 size0 = size_with_len`; call `solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->addBAMtags(bam0, size0, bam1)`; write the resulting `size0` bytes to the BGZF stream (no trailer).
+  5. Flush & close BGZF, close the input stream, and delete the tmp file on success.
+- Ensure we guard the call with `if (solo.pSolo.samAttrYes)`—when CB/UB are not requested there is nothing to inject and the tmp file should either stay empty or be skipped entirely.
+
+### Step 4 – Orchestration in `STAR.cpp`
+
+- After `soloMain.processAndOutput()` completes (the point where `readInfo` is populated), invoke `BAMunsortedAddSoloTags` when the new flag is active and a tmp file was produced (`source/STAR.cpp:240`). Pass `P`, `*genomeMain.genomeOut.g`, and `soloMain`.
+- Remove the earlier `bgzf_flush/bgzf_close` for unsorted BAM in this branch—closing happens inside the new helper.
+- Ensure error handling cleans up consistently: if pass 2 throws, surface the error, leave the tmp file for debugging, and avoid deleting any existing `Aligned.out.bam`.
+
+### Step 5 – Documentation and diagnostics
+
+- Update `docs/STARsolo.md` (BAM tag section) so users know about `--soloAddTagsToUnsorted` and the requirement to run with `--outSAMtype BAM Unsorted`.
+- Mention the new workflow in `RELEASEnotes.md` and `CHANGES.md` if appropriate.
+- Extend runtime logging: when the new flag is enabled, log the tmp file path at start of mapping and note when the second pass starts/completes (use `P.inOut->logMain`).
+
+## Testing and Validation Plan
+
+Prereqs: paired-end FASTQ that exercises CB correction (10x-style), matching whitelist, existing baseline pipeline to compare against.
+
+### 1. Behavioural baselines
+
+- **Sorted reference**: run the current sorted workflow (no code changes) to obtain `Aligned.sortedByCoord.out.bam` with CB/UB.
+- **Legacy unsorted error**: with the branch, run `--outSAMtype BAM Unsorted` without the new option and ensure the original fatal error still triggers when CB/UB requested.
+
+### 2. New mode happy path
+
+- Run STAR with `--outSAMtype BAM Unsorted --soloAddTagsToUnsorted yes` and CB/UB in `--outSAMattributes`.
+- While mapping runs, confirm the tmp container (`Aligned.out.unsorted.solo.tmp`) is created under `P.outFileTmp` and grows.
+- After completion, ensure the tmp file is removed and `Aligned.out.bam` exists.
+- Validate BAM structure with `samtools quickcheck` and `samtools view | head`.
+
+### 3. Tag correctness
+
+- Sort both the baseline sorted BAM and the new unsorted BAM by read name (or iterate with a Python `pysam` script) and compare CB/UB tuples per QNAME; expect zero mismatches.
+- Spot-check CR/UR tags to confirm they remain unchanged; verify that unmapped reads retain `CB`/`UB` semantics identical to the sorted BAM (usually `-`).
+
+### 4. Edge scenarios
+
+- Multi-gene UMI handling: run a dataset that triggers `pSolo.umiFiltering.MultiGeneUMI` and confirm UB assignments match the sorted output (including `-` cases).
+- Chimeric output: enable chimeric settings so `Chimeric` BAM writes occur and ensure those records flow through the tmp writer.
+- Restart/BySJout path: test with `--outFilterBySJoutStage 2` to make sure staged mapping still closes/flushes the tmp stream correctly.
+
+### 5. Performance sanity
+
+- Observe mapping runtime and peak tmp disk usage compared to the coordinate-sorted workflow; expect less disk and slightly less CPU despite the extra linear pass.
+- Confirm pass 2 is linear (no sorting) and scales with number of records.
+
+### 6. Developer quick check
+
+- Provide a small C++ or Python script in `extras/` (not shipped) to read the tmp file and dump a few `(iread, qname)` pairs for debugging—the script should confirm trailers decode correctly via `(trailer >> 32)`.
+## Risks and Mitigations
+
+- iread availability during pass 1 in unsorted path:
+  - Mitigation: plumb `iReadAll` (or equivalent) to the unsorted writer site; it already exists in output paths where Solo tags are eventually appended in the sorted mode.
+- Trailer packing mismatch:
+  - Use the exact packing `((uint64)iread) << 32` to match `>> 32` decode.
+  - Add a small unit/functional test on the tmp file decoding.
+- Header reproduction:
+  - Prefer reusing existing header generation functions (as in other BAM writers) instead of persisting a header file.
+- Concurrency and file lifecycle:
+  - Ensure pass 1 writer is closed before starting pass 2.
+  - Serial execution of pass 2 is fine; no need for multithreaded pass 2 for MVP.
+- Additional sinks (chimeric, transcriptome BAM):
+  - Audit every call to `outBAMunsorted` and either route through the tmp writer or short-circuit when the new mode is active.
+  - Add assertions in debug builds so we fail fast if a code path still expects a non-null BGZF handle while the tmp mode is engaged.
+- `outBAMfileUnsorted` now optional:
+  - Review any `if (P.inOut->outBAMfileUnsorted)` checks so they gracefully handle the `NULL` case (e.g., in cleanup, logging, error reporting).
+
+## Work Breakdown (Agent-Friendly Checklist)
+
+1) Parameters & CLI
+- Add `--soloAddTagsToUnsorted` parsing in `ParametersSolo` and expose `pSolo.addTagsToUnsorted`.
+- Update `Parameters.cpp` / `InOutStreams` so unsorted BGZF is opened only when the flag is off and the tmp filename/stream is prepared when it is on.
+- Gate header writes in `samHeaders.cpp` and ensure shutdown code still closes whichever handle is active.
+
+2) Solo tmp writer plumbing
+- Add the new writer class and stash it on `ReadAlign` (plus chunk-level storage) when the flag is enabled.
+- Route every `outBAMunsorted->unsortedOneAlign` call (main alignments, chimeric, transcriptome) through the tmp writer and pass `(iReadAll<<32)`.
+- Flush/close the tmp writer in `ReadAlignChunk_processChunks.cpp` and on final shutdown.
+
+3) Pass 2 executor
+- Implement `BAMunsortedAddSoloTags` to replay the tmp file, call `SoloFeature::addBAMtags`, and write the final unsorted BAM.
+- Delete the tmp file on success and propagate errors otherwise.
+
+4) Orchestration & logging
+- Invoke pass 2 from `STAR.cpp` after `soloMain.processAndOutput()` when the new mode is active.
+- Make sure lifecycle logging notes tmp creation and pass-2 start/finish; update cleanup paths accordingly.
+
+5) Docs & --help
+- Document the new option in `docs/STARsolo.md`, `RELEASEnotes.md`, and CLI help output.
+- Mention limitations (requires `--outSAMtype BAM Unsorted`, still two-pass internally).
+
+6) Tests
+- Execute the scenarios in the testing plan: baseline sorted run, legacy unsorted failure, new-mode correctness, edge cases, and performance spot checks.
+## File/Code Touchpoints (Proposed)
+
+- New:
+  - `source/BAMoutputSoloTmp.h`
+  - `source/BAMoutputSoloTmp.cpp`
+  - `source/BAMunsortedAddSoloTags.h`
+  - `source/BAMunsortedAddSoloTags.cpp`
+- Modified:
+  - `source/ParametersSolo.h/.cpp` (new flag; validation change)
+  - `source/parametersDefault/` (option surfaced in help text)
+  - `source/Parameters.cpp`, `source/InOutStreams.cpp`, `source/InOutStreams.h` (tmp path/handle management)
+  - `source/samHeaders.cpp` (conditional header emission)
+  - `source/ReadAlignChunk.cpp`, `source/ReadAlignChunk_processChunks.cpp`, `source/ReadAlign_outputAlignments.cpp`, `source/ChimericAlign_chimericBAMoutput.cpp` (routing unsorted writes)
+  - `source/STAR.cpp` (second-pass orchestration and logging)
+  - `docs/STARsolo.md`, `RELEASEnotes.md`, CLI help text
+## Acceptance Criteria
+
+- When run with `--outSAMtype BAM Unsorted --soloAddTagsToUnsorted yes`:
+  - Final BAM contains CB/UB tags identical to the baseline sorted run for the same dataset (per‑QNAME comparison).
+  - No coordinate sorting performed; temp disk usage is significantly reduced.
+  - Intermediate tmp cleaned up on success.
+- When the new flag is absent, requesting CB/UB with `--outSAMtype BAM Unsorted` still surfaces the existing fatal parameter error.
+- All existing modes remain unaffected (no regression).
+
+## Future Enhancements
+
+- Make the tmp container BGZF‑compressed to reduce disk (optional; requires BGZF random access or streaming read).
+- Support parallelized pass 2 (shard tmp, merge outputs) if needed for very large datasets.
+- Add a recovery mode to resume from tmp if job is interrupted between pass 1 and pass 2.

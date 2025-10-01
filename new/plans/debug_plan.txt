@@ -1,0 +1,79 @@
+# Debug Plan – Guardrails for Tag Injection & Binary Tag Output
+
+## Goal
+Instrument the new tag-handling code paths (unsorted CB/UB injection and binary tag table emission) with defensive checks and optional verbose logging to surface failures early—especially allocation issues and mismatched record counts—without touching the stable core STAR logic.
+
+## Phase 0 – Snapshot
+1. `git status -sb` to confirm working tree.
+2. Note current crash scenario (sample name, command line, logs).
+
+## Phase 1 – Allocation Guardrails
+Focus on modules recently introduced for tag buffering and unsorted injection.
+
+1. **BAMTagBuffer allocations** (`source/BAMTagBuffer.cpp`):
+   - Wrap `entries.reserve()` and `entries.push_back()` with checks. Example helper:
+     ```cpp
+     template <typename T>
+     inline void safe_push_back(std::vector<T> &vec, const T &value, const char *context) {
+         try {
+             vec.push_back(value);
+         } catch (std::bad_alloc &) {
+             std::cerr << "ERROR: Allocation failed in " << context
+                       << " (entries size=" << vec.size() << ")" << std::endl;
+             std::cerr << "Consider reducing --runThreadN or checking system memory." << std::endl;
+             std::exit(1);
+         }
+     }
+     ```
+   - Use in `BAMTagBuffer::append` (replace raw `entries.push_back`).
+
+2. **Temporary buffers in `BAMunsortedAddSoloTags`**:
+   - `new char[BAM_ATTR_MaxSize]`: check result; log size on failure and abort.
+   - Add diagnostic print (guarded by debug flag) when allocating large buffers.
+
+3. **SoloFeature arrays** (if tag injection touches them):
+   - For any `new` or `resize` in `SoloFeature::finalizeTagTableFromReadInfo`/`writeTagTableIfRequested`, wrap with try/catch and log context.
+
+## Phase 2 – Optional Debug Flag
+Provide a centralized toggle (ENV or CLI) to control verbose diagnostics.
+
+1. Add env check, e.g., `const bool g_debugTag = getenv("STAR_DEBUG_TAG");`
+2. When true, emit messages for:
+   - Each allocation (size, thread id).
+   - Tag stream header values in `writeTagBinary`.
+   - Number of records written and any skipped entries.
+3. Keep output on stderr to avoid breaking TSV/binary output.
+
+## Phase 3 – Binary Tag Writer Assertions
+1. In `BAMTagBuffer::writeTagBinary`:
+   - After counting `validRecords`, assert `validRecords == entries.size()` when `g_debugTag` is on; if not, log mismatches.
+   - If `status==1` but `cbIdx==0` or UMI invalid, log record index (error).
+2. After writing, reopen file (or track write count) to verify `expected_bytes == 32 + validRecords * record_bytes`; warn if mismatch.
+
+## Phase 4 – Unsorted Injection Checks
+1. In `BAMunsortedAddSoloTags.cpp` loop:
+   - Validate the trailer `iread` extracted from tmp file is < `readInfo.size()`; if not, log and skip (or abort).
+   - After `addBAMtags` modifies `size0`, ensure it’s ≤ `BAM_ATTR_MaxSize`; log overflow.
+2. For debug mode, print first N `iread` values and resulting CB/UB strings.
+
+## Phase 5 – Alignment Between BAM & Tag Stream
+1. Maintain a counter in `BAMTagBuffer` (e.g., `lastRecordIndex`) and assert each appended `recordIndex` is monotonic when debug flag enabled. Emit warning if out of order; this can surface upstream issues.
+2. At the end of `writeTagBinary`, verify final `recordIndex` equals `validRecords-1`; otherwise log explicit warning.
+
+## Phase 6 – Verbose Log Helpers
+1. Add `inline void logDebugTag(const std::string &msg)` that checks `g_debugTag` before printing with timestamp/thread id.
+2. Use in allocation guardrails, record counting, and unusual branch handling.
+
+## Phase 7 – Testing
+1. Rebuild (`make STAR`) after instrumentation.
+2. Run minimal mem test (`mem_test_tags.sh`) with `STAR_DEBUG_TAG=1` to see new logs.
+3. Run the failing sample to capture diagnostics.
+4. If too verbose, adjust log levels or wrap in macros.
+
+## Phase 8 – Cleanup / Optional
+1. Leave guardrails in place; keep debug output behind env flag so production output stays clean.
+2. Document the new env var (`STAR_DEBUG_TAG`) in developer docs for future debugging sessions.
+3. If guardrails prove stable, consider moving some assertions into release builds (e.g., record count checks).
+
+# End of plan
+

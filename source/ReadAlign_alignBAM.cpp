@@ -3,6 +3,7 @@
 #include "ErrorWarning.h"
 #include "IncludeDefine.h"
 # include "BAMfunctions.h"
+#include "ZGZXTags.h"
 
 #include <type_traits>
 
@@ -441,6 +442,22 @@ int ReadAlign::alignBAM(Transcript const &trOut, uint nTrOut, uint iTrOut, uint 
                             attrN+=bamAttrArrayWrite(algenes,"gn",attrOutArray+attrN);                            
                         };
                         break;                                                       
+                        
+                    case ATTR_ZG:
+                        {
+                            // Use GeneFull instead of Gene to capture intronic matches
+                            string zgTag = ZGZXTags::formatZGTag(readAnnot.annotFeatures[SoloFeatureTypes::GeneFull], *chunkTr);
+                            attrN+=bamAttrArrayWrite(zgTag, "ZG", attrOutArray+attrN);
+                        };
+                        break;
+
+                    case ATTR_ZX:
+                        {
+                            // Use GeneFull instead of Gene to capture intronic matches  
+                            string zxTag = ZGZXTags::formatZXTag(readAnnot.annotFeatures[SoloFeatureTypes::GeneFull]);
+                            attrN+=bamAttrArrayWrite(zxTag, "ZX", attrOutArray+attrN);
+                        };
+                        break;
                         
                     case ATTR_sF:
                         {

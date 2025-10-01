@@ -255,7 +255,8 @@ void ReadAlignChunk::processChunks() {//read-map-write chunks
     };//cycle over input chunks
 
     if (P.outFilterBySJoutStage!=1 && RA->iRead>0) {//not the first stage of the 2-stage mapping
-        if (P.outBAMunsorted) chunkOutBAMunsorted->unsortedFlush();
+        if (P.outBAMunsorted && chunkOutBAMunsorted!=NULL) chunkOutBAMunsorted->unsortedFlush();
+        if (chunkOutBAMsoloTmp!=NULL) chunkOutBAMsoloTmp->flush();
         if (P.outBAMcoord) chunkOutBAMcoord->coordFlush();
         if (chunkOutBAMquant!=NULL) chunkOutBAMquant->unsortedFlush();
 

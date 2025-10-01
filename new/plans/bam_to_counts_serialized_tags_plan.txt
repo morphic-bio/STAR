@@ -1,0 +1,115 @@
+# Flex Plan – Consume Binary CB/UB Tag Stream (v2)
+
+## Goal
+Update `bam_to_counts` to read the revised STAR binary format:
+- Header: 4 × uint64_t (little-endian) containing `statusBits`, `cbBits`, `umiBits`, `recordCount`.
+- Records: bit-packed `(status, cbIdx, umiPacked)` with byte alignment per record.
+- Actively verify `recordCount` to detect truncated inputs.
+
+## Prerequisites
+1. `git status -sb` clean or tracked changes.
+2. Access to updated binary fixture (e.g., `testing/Aligned.out.cb_ub.bin`) generated from the new STAR build.
+3. Awareness of whitelist (`id_to_cell`) and UMI packing utilities.
+
+## Phase 0 – Snapshot & Fixtures
+1. Record repo status.
+2. Stage new binary fixture alongside existing test BAMs.
+3. Note header fields for documentation.
+
+## Phase 1 – Reader Structures
+1. Create `tag_stream_reader.h/.c` (or embed inline) with:
+   ```c
+   typedef struct tag_stream_header {
+       uint64_t status_bits;
+       uint64_t cb_bits;
+       uint64_t umi_bits;
+       uint64_t record_count;
+       uint64_t record_bytes; // derived: ceil((status+cb+umi)/8)
+   } tag_stream_header_t;
+
+   typedef struct tag_stream_reader {
+       FILE *fp;
+       tag_stream_header_t hdr;
+       uint64_t cursor; // records consumed
+   } tag_stream_reader_t;
+   ```
+2. API:
+   ```c
+   int tag_stream_open(const char *path, tag_stream_reader_t *reader);
+   void tag_stream_close(tag_stream_reader_t *reader);
+   int tag_stream_next(tag_stream_reader_t *reader,
+                       uint8_t *status,
+                       uint64_t *cb_idx,
+                       uint64_t *umi_packed);
+   ```
+   - `tag_stream_open` reads 32-byte header (little-endian) and validates.
+   - `tag_stream_next` reads exact `record_bytes`, unpacks bits in LSB-first order.
+   - On EOF before `record_count` consumed: return distinct error to flag truncation.
+3. Implementation details:
+   - Header read/validate: compute `record_bytes = ceil((status+cb+umi)/8)`, enforce `status_bits==1`, `umi_bits%2==0`, set `umi_len=umi_bits/2`.
+   - Record unpack: accumulate bytes little-endian into a wide accumulator (e.g., 128-bit), then mask/shift in order: status → cbIdx → umiPacked.
+   - UMI decode: fill a char buffer of length `umi_len` from the end while consuming LSBs, mapping 0/1/2/3 to A/C/G/T (matches STAR writer orientation).
+
+## Phase 2 – Replace TSV Globals
+1. Remove `g_tags_entries`, `g_tags_cursor`, `tags_entry_t` definitions.
+2. Introduce `static tag_stream_reader_t g_tag_stream; static int g_tag_stream_active = 0;`.
+3. Implement `open_tags_stream` replacing CSV loader:
+   - `if (tag_stream_open(path, &g_tag_stream) < 0) { error; return -1; }`
+   - Set `g_tag_stream_active = 1;`.
+4. Update cleanup to close reader, reset flag.
+
+## Phase 3 – Decode Records
+1. Rewrite `override_tags_from_table(sam_alignment_t *aln)`:
+   - If inactive, return.
+   - Call `tag_stream_next`.
+     * If `cursor >= record_count` and more reads requested, warn once and treat as missing tags.
+     * On decoding error (unexpected EOF), log error, disable stream.
+   - When `status == 0` ⇒ clear CB/UB (set first char to `\0`) and return.
+   - Convert `cb_idx` (1-based) back to string via `id_to_cell`; guard index range.
+   - Convert `umi_packed` to string using helper `unpack_umi(packed, umi_bits/2)`; ensure UB buffer is `umi_len+1` including NUL.
+   - Increment reader `cursor` and assert `cursor <= record_count`.
+2. Increment cursor inside reader and optionally assert `cursor <= record_count`.
+
+## Phase 4 – Validation Checks
+1. In `tag_stream_open` enforce:
+   - `status_bits == 1` else fail.
+   - `cb_bits > 0` and small enough (document limit, e.g., ≤32).
+   - `umi_bits` even, ≤64. Set `umi_len = umi_bits/2` and require `umi_len <= 31` to fit `aln->ub_tag` buffer.
+   - `record_count > 0` unless empty file expected.
+2. In `tag_stream_next`, after finishing stream verify `cursor == record_count`; if not, warn about surplus data.
+3. Synchronize with BAM stream: consume exactly one tag record per alignment. If BAM ends before `record_count` or vice versa, abort with clear error.
+
+## Phase 5 – CLI / Docs
+1. Update `print_usage` text for `--tags-table`: describe binary format (header layout, sentinel 0 for missing CB/UMI).
+2. Decide whether to keep legacy TSV support:
+   - If yes, detect header magic (e.g., peek first byte for `#`).
+   - If no, remove TSV code and adjust docs accordingly.
+
+## Phase 6 – Tests
+1. Update `tests/test_bam_tags.sh` to use `.bin` file and a direct record-by-record validator (C or Python) to assert BAM↔tag consistency.
+2. Ensure test compares outputs from
+   - BAM with embedded tags (control)
+   - BAM without tags + binary table.
+3. Add unit tests for `tag_stream_reader` decoding known data (small fixture or handcrafted): cover status=0/1, cbIdx bounds, various UMI patterns, header edge cases.
+4. Adjust integration tests referencing old TSV (Python CLI tests, etc.).
+5. Document how to regenerate binary fixture (script or README entry).
+
+## Phase 7 – Build & Validate
+1. Rebuild C components (`./build.sh`).
+2. Run `./scripts/run_tests.sh --fast-only`, then full suite.
+3. Verify logs note `record_count` when not quiet; confirm truncated file detection by simulating early EOF (optional).
+
+## Phase 8 – Documentation
+1. Update `README.md`, `docs/PRODUCTION_GUIDE.md`, etc., describing the binary tag stream (header fields, bit order, sanity check).
+2. Mention improved RAM characteristics (streaming, no large arrays).
+
+## Phase 9 – Wrap-Up
+1. `git status -sb` to confirm modified files (reader, loader, tests, docs).
+2. Summarize changes for PR: binary tags, header with record count, sanity checks.
+3. Coordinate release timing with STAR repo so both sides consume new format simultaneously.
+
+## Notes
+- Treat `cb_idx == 0` or `umi_packed == 0` as “missing” regardless of status bit; the writer guarantees zeros but don’t rely on it.
+- Reader should strictly enforce `record_count`; if stream ends early, fail fast so pipeline surfaces the issue.
+- Keep little-endian assumptions explicit in code/comments so future portability work is clear.
+ - For a deprecation window, auto-detect TSV vs binary by attempting to parse the 32-byte header; if invalid, fall back to TSV loader.

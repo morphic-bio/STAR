@@ -49,6 +49,13 @@ CXXFLAGS_common := -std=c++11 -fopenmp $(COMPTIMEPLACE) $(GIT_BRANCH_COMMIT_DIFF
 CXXFLAGS_main := -O3 $(CXXFLAGS_common)
 CXXFLAGS_gdb := -O0 -g3 $(CXXFLAGS_common)
 
+# AddressSanitizer flags (enabled with ASAN=1)
+ifdef ASAN
+CFLAGS   += -fsanitize=address -fno-omit-frame-pointer -O1
+CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -O1
+LDFLAGS  += -fsanitize=address
+endif
+
 ##########################################################################################################
 OBJECTS = systemFunctions.o funPrimaryAlignMark.o \
 	SoloFeature_collapseUMI_Graph.o SoloFeature_collapseUMIall.o ParametersClip_initialize.o ClipMate_clip.o ClipCR4.o opal/opal.o ClipMate_clipChunk.o ClipMate_initialize.o \
@@ -60,7 +67,8 @@ OBJECTS = systemFunctions.o funPrimaryAlignMark.o \
 	ParametersSolo.o SoloRead.o SoloRead_record.o \
 	SoloReadBarcode.o SoloReadBarcode_getCBandUMI.o SoloBarcode_extractBarcode.o \
 	SoloReadFeature.o SoloReadFeature_record.o SoloReadFeature_inputRecords.o \
-	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_addBAMtags.o \
+	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_addBAMtags.o SoloFeature_writeTagTable.o \
+	BAMTagBuffer.o BAMTagBinaryWriter.o \
 	ReadAlign_transformGenome.o Genome_transformGenome.o Transcript_convertGenomeCigar.o \
 	twoPassRunPass1.o samHeaders.o Genome_genomeLoad.o Genome_genomeOutLoad.o Transcript_transformGenome.o ReadAlign_outputSpliceGraphSAM.o \
 	ReadAlign_mapOneReadSpliceGraph.o SpliceGraph.o SpliceGraph_swScoreSpliced.o SpliceGraph_swTraceBack.o \
@@ -91,7 +99,8 @@ OBJECTS = systemFunctions.o funPrimaryAlignMark.o \
 	sjdbLoadFromFiles.o sjdbLoadFromStream.o sjdbPrepare.o sjdbBuildIndex.o sjdbInsertJunctions.o mapThreadsSpawn.o \
 	Parameters_readFilesInit.o Parameters_openReadsFiles.cpp Parameters_closeReadsFiles.cpp Parameters_readSAMheader.o \
 	bam_cat.o serviceFuns.o GlobalVariables.cpp \
-	BAMoutput.o BAMfunctions.o ReadAlign_alignBAM.o BAMbinSortByCoordinate.o signalFromBAM.o bamRemoveDuplicates.o BAMbinSortUnmapped.o
+	BAMoutput.o BAMoutputSoloTmp.o BAMunsortedAddSoloTags.o BAMfunctions.o ReadAlign_alignBAM.o BAMbinSortByCoordinate.o signalFromBAM.o bamRemoveDuplicates.o BAMbinSortUnmapped.o \
+	ZGZXTags.o
 
 SOURCES := $(wildcard *.cpp) $(wildcard *.c)
 

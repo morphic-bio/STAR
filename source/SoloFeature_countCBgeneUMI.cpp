@@ -17,6 +17,7 @@ void SoloFeature::countCBgeneUMI()
         time(&rawTime);
         P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Allocated and initialized readInfo array, nReadsInput = " << nReadsInput <<endl;        
     };
+    
 
     rGeneUMI = new uint32[rguStride*nReadsMapped]; //big array for all CBs - each element is gene and UMI
     rCBp = new uint32*[nCB+1];

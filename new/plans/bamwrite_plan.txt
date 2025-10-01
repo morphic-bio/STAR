@@ -1,0 +1,34 @@
+Goal
+- Ensure the unsorted BAM is always materialized: when no SAM tag injection is required, STAR must stream directly to the BAM; when CB/UB tags are requested, STAR should buffer to the solo tmp container and replay it in pass 2.
+
+Pre-checks
+- Inspect recent build artifacts to confirm the tree compiles before edits (`ninja` or existing build script).
+- Skim `Log.out` from a failing run to understand which CLI combinations hit the bug (notably `--soloAddTagsToUnsorted yes` without CB/UB in `--outSAMattributes`).
+
+Implementation Steps
+1. Parameters struct plumbing
+   - In `source/Parameters.h`, add a boolean member (e.g. `bool outBAMunsortedUseSoloTmp;`) alongside the other unsorted BAM fields.
+   - Default the flag to `false` where other run-time booleans are reset (`source/Parameters.cpp`, right after `outBAMunsorted=false;`).
+
+2. Decide the write mode once, immediately after Solo init
+   - In `source/Parameters.cpp` within the block that currently opens the solo tmp (`if (outBAMunsorted) { ... }`):
+     * Compute `bool useSoloTmp = pSolo.addTagsToUnsorted && pSolo.samAttrYes;`.
+     * Assign `outBAMunsortedUseSoloTmp = useSoloTmp;` and clear `outBAMfileUnsortedSoloTmpName` if `useSoloTmp` is false.
+     * When `useSoloTmp` is true, keep the existing tmp file creation logic unchanged.
+     * Otherwise, fall back to opening `inOut->outBAMfileUnsorted` via `bgzf_open` as before, ensuring the handle is non-null and errors propagate.
+     * Consider logging a single DEBUG line noting which path was chosen to aid future diagnostics.
+
+3. Drive pass 2 from the stored decision
+   - In `source/STAR.cpp`, replace the current condition `if (P.pSolo.addTagsToUnsorted && P.outBAMfileUnsortedSoloTmpName != "")` with `if (P.outBAMunsortedUseSoloTmp)`, optionally retaining the tmp-name check inside an assertion.
+   - No change is needed inside `BAMunsortedAddSoloTags`, because the guard on `samAttrYes` is already consistent with the new decision.
+
+4. Cleanup / safety
+   - Ensure any code paths that rely on `P.outBAMfileUnsortedSoloTmpName` handle the empty-string case (the existing cleanup in `InOutStreams.cpp` already checks `is_open()` so no edits expected).
+   - Confirm the tmp filename is only populated when `useSoloTmp` is true.
+
+5. Verification
+   - Rebuild STAR (`./build_star.sh` or equivalent) and run two smoke tests:
+     a. CLI with `--soloAddTagsToUnsorted yes` **and** CB/UB attributes to confirm the tmp path is created, consumed, and the BAM appears.
+     b. CLI with `--soloAddTagsToUnsorted yes` but *without* CB/UB attributes to confirm the BAM is written directly and no tmp file remains.
+   - Review `Log.out` for the debug line added in step 2.
+

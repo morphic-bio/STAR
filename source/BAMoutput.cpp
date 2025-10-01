@@ -1,4 +1,5 @@
 #include "BAMoutput.h"
+#include "BAMTagBuffer.h"
 #include <sys/stat.h>
 #include "GlobalVariables.h"
 #include <pthread.h>
@@ -39,6 +40,24 @@ BAMoutput::BAMoutput (BGZF *bgzfBAMin, Parameters &Pin) : P(Pin){//allocate BAM 
     bamArray = new char [bamArraySize];
     binBytes1=0;
     bgzfBAM=bgzfBAMin;
+    tagBuffer=nullptr;
+    //not used
+    binSize=0;
+    binStream=NULL;
+    binStart=NULL;
+    binBytes=NULL;
+    binTotalBytes=NULL;
+    binTotalN=NULL;
+    nBins=0;
+};
+
+BAMoutput::BAMoutput (BGZF *bgzfBAMin, Parameters &Pin, BAMTagBuffer* tagBufferIn) : P(Pin){//allocate BAM array with tag buffer
+
+    bamArraySize=P.chunkOutBAMsizeBytes;
+    bamArray = new char [bamArraySize];
+    binBytes1=0;
+    bgzfBAM=bgzfBAMin;
+    tagBuffer=tagBufferIn;
     //not used
     binSize=0;
     binStream=NULL;
@@ -65,6 +84,16 @@ void BAMoutput::unsortedOneAlign (char *bamIn, uint bamSize, uint bamSize2) {//r
     memcpy(bamArray+binBytes1, bamIn, bamSize);
     binBytes1 += bamSize;
 
+};
+
+void BAMoutput::unsortedOneAlign (char *bamIn, uint bamSize, uint bamSize2, const BAMRecordMeta& meta) {
+    // Store metadata in tag buffer if available
+    if (tagBuffer) {
+        tagBuffer->append(meta);
+    }
+    
+    // Delegate to the original method for BAM output
+    unsortedOneAlign(bamIn, bamSize, bamSize2);
 };
 
 void BAMoutput::unsortedFlush () {//flush all alignments

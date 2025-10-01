@@ -4,6 +4,7 @@
 #include "IncludeDefine.h"
 #include "SoloCommon.h"
 #include "SoloFeatureTypes.h"
+#include <set>
 
 class ReadAnnotFeature {//annotations for one feature
 public:

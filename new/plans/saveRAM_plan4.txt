@@ -1,0 +1,106 @@
+# saveRAM Plan v4 – Entry Compaction
+
+## Goal
+Reduce in-memory footprint of `BAMTagBuffer` by eliminating redundant fields and shrinking per-entry data to the minimum needed for final tag-table emission.
+
+## Expected Outcome
+- `BAMTagEntry` shrinks from 32 bytes to 16 bytes (or less) per alignment.
+- `ReadGroup` scaffolding removed; no per-read bookkeeping arrays remain.
+- Output logic references the compact entry fields and existing `readInfo` data.
+
+## Prerequisites
+1. Working tree clean or changes tracked (`git status -sb`).
+2. Able to build STAR (`make STAR`).
+3. Familiar with current v3 refactor (QNAME removed from TSV).
+
+## Phase 0 – Snapshot
+1. `git status -sb`.
+2. Optional baseline memory measurement from a recent run (note peak RSS).
+
+## Phase 1 – Narrow BAMTagEntry Fields
+1. Edit `source/BAMTagBuffer.h`.
+   - Replace `struct BAMTagEntry` definition with:
+     ```cpp
+     struct BAMTagEntry {
+         uint64_t recordIndex;
+         uint32_t readId;    // replaces groupIndex, stores iReadAll cast to 32-bit
+         uint16_t alignIdx;
+         uint8_t  mate;
+         uint8_t  padding;   // optional: keep for alignment, set to 0
+     };
+     ```
+   - Remove `iReadAll` and `groupIndex` members.
+   - Update constructors to initialize new members (padding can be defaulted).
+   - Add static_assert or runtime check to ensure `readId` widening is safe (see Phase 2).
+
+2. Update forward declarations: ensure `<cstdint>` or `<stdint.h>` is included if not already.
+
+## Phase 2 – Guard Against Overflow
+1. Decide acceptable range for `readId` (e.g., < 4,000,000,000 reads).
+2. In `append()` (Phase 3) add `if (meta.iReadAll > UINT32_MAX) { throw/exit with message }` to catch runaway cases.
+
+## Phase 3 – Simplify BAMTagBuffer Implementation
+1. Edit `source/BAMTagBuffer.cpp`.
+   - Remove `getOrCreateGroup`, `readGroups`, and any references to them.
+   - Delete `ReadGroup` struct definition from the header.
+   - Update constructor: drop `readGroups.reserve(...)` line.
+   - Update destructor/`clear()`: stop clearing `readGroups`.
+
+2. Rewrite `append()`:
+   ```cpp
+   void BAMTagBuffer::append(const BAMRecordMeta& meta) {
+       std::lock_guard<std::mutex> lock(entriesMutex);
+       if (meta.iReadAll > UINT32_MAX) {
+           // emit error, e.g., errOut << ... << exit(1);
+       }
+       BAMTagEntry entry;
+       entry.recordIndex = meta.recordIndex;
+       entry.readId = static_cast<uint32_t>(meta.iReadAll);
+       entry.alignIdx = static_cast<uint16_t>(meta.alignIdx);
+       entry.mate = static_cast<uint8_t>(meta.mate);
+       entry.padding = 0;
+       entries.push_back(entry);
+   }
+   ```
+   - Optional: clamp/validate `meta.alignIdx` > `UINT16_MAX` similar to `readId` guard.
+
+3. Remove `reserveReadCapacity` entirely, or replace implementation with a no-op (since we no longer maintain `readGroups`). Update header accordingly.
+
+## Phase 4 – Adjust writeTagTable
+1. In `source/BAMTagBuffer.cpp::writeTagTable`:
+   - Replace `entry.iReadAll` with `entry.readId` wherever used.
+   - Remove references to `readGroups`.
+   - Confirm `entries` is still sorted by `recordIndex` before emitting.
+   - Keep CB/UB/status derivation unchanged except for accessing `readInfo[entry.readId]`.
+
+2. Confirm header comment and log messages remain accurate.
+
+## Phase 5 – Clean Up Header
+1. In `source/BAMTagBuffer.h`:
+   - Delete any include that’s no longer needed (`SoloCommon.h` may still be required for `readInfoStruct` in `writeTagTable` signature; keep if necessary).
+   - Remove declarations for eliminated methods (`reserveReadCapacity`, `getOrCreateGroup`).
+   - Ensure `size()` remains valid.
+
+## Phase 6 – Build & Tests
+1. `cd source && make STAR`.
+2. Copy binary if required by workflow.
+3. Return to repo root and run tag-related tests:
+   - `./emit_test.sh`
+   - `./tag_test.sh` (if relevant)
+   - `./integration_test.sh` if time permits
+4. Compare generated tag tables to prior baseline (they should be unchanged).
+
+## Phase 7 – Verify Memory Gains
+1. Re-run representative STAR command with `/usr/bin/time -v` (or existing profiling tooling).
+2. Record new peak RSS and compare to baseline from Phase 0.
+
+## Phase 8 – Wrap-Up
+1. `git status -sb` to review diffs.
+2. Document changes and any overflow guard decisions.
+3. Update internal plan references if needed.
+4. Keep `saveRAM_plan4.txt` in repo until work completes.
+
+## Notes
+- If future datasets exceed `UINT32_MAX` read IDs, add a fallback compile-time option to keep 64-bit fields.
+- Consider moving to struct-of-arrays if further compaction is required later.
+- Thread safety remains unchanged; `append()` still uses the mutex.

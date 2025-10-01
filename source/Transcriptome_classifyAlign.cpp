@@ -196,8 +196,9 @@ void Transcriptome::classifyAlign (Transcript **alignG, uint64 nAlignG, ReadAnno
 
         //binary search through transcript starts
         uint32 tr1=binarySearch1a<uint>(aG.exons[0][EX_G], trS, nTr);//tr1 has the maximum transcript start such that it is still <= align start
-        if (tr1==(uint32) -1) 
+        if (tr1==(uint32) -1) {
             continue; //this alignment is outside of range of all transcripts
+        }
 
         uint64 aGend=aG.exons[aG.nExons-1][EX_G]+aG.exons[aG.nExons-1][EX_L]-1; //TODO: this estimate does work if 2nd mate end is < 1st mate end
 

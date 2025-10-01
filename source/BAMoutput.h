@@ -5,6 +5,17 @@
 #include SAMTOOLS_BGZF_H
 #include "Parameters.h"
 
+// Forward declaration to avoid circular dependency
+class BAMTagBuffer;
+
+struct BAMRecordMeta {
+    uint64_t recordIndex;
+    uint64_t iReadAll;
+    uint32_t mate;      // 0 or 1
+    uint32_t alignIdx;  // multi-mapper ordinal
+    const char* qname;  // pointer or nullptr
+};
+
 class BAMoutput {//
 public:
     //sorted output
@@ -14,7 +25,9 @@ public:
     void coordFlush ();
     //unsorted output
     BAMoutput (BGZF *bgzfBAMin, Parameters &Pin);
+    BAMoutput (BGZF *bgzfBAMin, Parameters &Pin, BAMTagBuffer* tagBufferIn);
     void unsortedOneAlign (char *bamIn, uint bamSize, uint bamSize2);
+    void unsortedOneAlign (char *bamIn, uint bamSize, uint bamSize2, const BAMRecordMeta& meta);
     void unsortedFlush ();
     void coordUnmappedPrepareBySJout();
 
@@ -32,6 +45,7 @@ private:
     BGZF *bgzfBAM;
     Parameters &P;
     string bamDir;
+    BAMTagBuffer* tagBuffer; // Optional tag buffer for metadata collection
 };
 
 #endif

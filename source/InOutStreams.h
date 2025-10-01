@@ -9,6 +9,9 @@ class InOutStreams {
     ostream *logStdOut, *outSAM;
     ofstream logStdOutFile, outSAMfile;
     BGZF *outBAMfileUnsorted, *outBAMfileCoord, *outQuantBAMfile;
+    
+    //solo tmp file for two-pass unsorted CB/UB injection
+    ofstream outBAMfileUnsortedSoloTmp;
 
     ofstream outChimSAM, outChimJunction, logMain, logProgress, logFinal, outUnmappedReadsStream[MAX_N_MATES];
     ifstream readIn[MAX_N_MATES];

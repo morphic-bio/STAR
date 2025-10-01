@@ -1,6 +1,8 @@
 #include "SoloFeature.h"
+#include "BAMTagBuffer.h"
 #include "streamFuns.h"
 #include "TimeFunctions.h"
+#include "SequenceFuns.h"
 #include "serviceFuns.cpp"
 #include <unordered_map>
 #include "SoloCommon.h"
@@ -25,6 +27,11 @@ void SoloFeature::collapseUMIall()
         readFeatSum->stats.V[readFeatSum->stats.yesWLmatch] += nReadPerCBtotal[icb];        
         readFeatSum->stats.V[readFeatSum->stats.yessubWLmatch_UniqueFeature ] += nReadPerCBunique[icb];        
     };
+    
+    // After all CB/UB values are finalized, update the BAMTagBuffer if tag table export is enabled
+    if (pSolo.writeTagTableEnabled && pSolo.bamTagBuffer && readInfo.size() > 0) {
+        finalizeTagTableFromReadInfo();
+    }
 };
 
 void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<uint32> &gID,  vector<uint32> &gReadS)
@@ -654,5 +661,11 @@ uint32 SoloFeature::umiArrayCorrect_Directional(const uint32 nU0, uintUMI *umiAr
             cout << nU1 <<" "<< umiC.size()<<endl;
         return umiC.size();
     };
+};
+
+void SoloFeature::finalizeTagTableFromReadInfo() {
+    // This method is called after collapseUMIall() has finalized all CB/UB values
+    // No longer needs to call finalizeTag - the writeTagBinary method will derive
+    // CB/UB/status directly from readInfo when needed
 };
 

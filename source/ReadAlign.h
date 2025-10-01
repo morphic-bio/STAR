@@ -9,6 +9,7 @@
 #include "OutSJ.h"
 #include "Transcriptome.h"
 #include "BAMoutput.h"
+#include "BAMoutputSoloTmp.h"
 #include "Quantifications.h"
 #include "ChimericDetection.h"
 #include "SoloRead.h"
@@ -18,6 +19,7 @@
 
 #include <time.h>
 #include <random>
+#include <atomic>
 
 class ReadAlign {
     public:
@@ -28,11 +30,14 @@ class ReadAlign {
 
         uint64 iRead, iReadAll;
         char **Read1;
+        char* readName; // Read name for current read
 
         Stats statsRA; //mapping statistics
 
         istream* readInStream[MAX_N_MATES];
         BAMoutput *outBAMcoord, *outBAMunsorted, *outBAMquant;//sorted by coordinate, unsorted, transcriptomic BAM structure
+        class BAMoutputSoloTmp *outBAMsoloTmp;//solo tmp writer for two-pass unsorted CB/UB injection
+        std::atomic<uint64_t>* bamRecordIndexPtr; //pointer to global BAM record counter
         fstream chunkOutChimSAM, *chunkOutChimJunction, chunkOutUnmappedReadsStream[MAX_N_MATES], chunkOutFilterBySJoutFiles[MAX_N_MATES];
         OutSJ *chunkOutSJ, *chunkOutSJ1;
 
@@ -128,7 +133,6 @@ class ReadAlign {
         char** Read0;
         char** Qual0;
         char** readNameMates;
-        char* readName;
 
         uint readNmates;
         //split

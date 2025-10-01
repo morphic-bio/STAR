@@ -913,6 +913,17 @@ soloCellReadStats           None
     string:                 Output reads statistics for each CB
                             Standard    ... standard output
 
+soloAddTagsToUnsorted       no
+    string:                 add CB and UB tags to unsorted BAM output via two-pass processing
+                            yes         ... enable two-pass mode: generate temporary file during first pass, then add CB/UB tags during second pass
+                            no          ... disable two-pass mode (default): CB/UB tags only available in sorted BAM
+
+soloWriteTagTable           None
+    string:                 export corrected CB/UB assignments to a sidecar table instead of or in addition to patching BAM
+                            None        ... disable sidecar table export (default)
+                            Default     ... write to <outFileNamePrefix>Aligned.out.cb_ub.bin
+                            <path>      ... write to specified file path
+
 #####UnderDevelopment_begin : not supported - do not use
 soloClusterCBfile           -
     string:                 file containing the cluster information for cell barcodes, two columns: CB cluster_index. Only used with --soloFeatures Transcript3p

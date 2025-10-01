@@ -105,6 +105,9 @@ public:
     void cellFiltering();
     void emptyDrops_CR();
     void loadRawMatrix();
+    
+    void writeTagTableIfRequested(bool filteredPass);
+    void finalizeTagTableFromReadInfo(); // Helper to update BAMTagBuffer from readInfo
 };
 
 #endif

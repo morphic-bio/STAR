@@ -1,0 +1,142 @@
+# STARsolo Unsorted CB/UB Testing Plan
+
+This document captures the scripts we need to author so every major stage of the two-pass unsorted CB/UB flow can be validated against the existing coordinate-sorted pipeline. Each script below should live under `testing/scripts/` (create the directory if it does not exist) and use `/storage/downsampled/SC2300771` as the primary data source, `/storage/scRNAseq_output/whitelists/737K-fixed-rna-profiling.txt` as the whitelist, and `/storage/scRNAseq_output/indices-98-32/star` as the genome reference.
+
+## Shared fixtures
+- **Input FASTQs** (paired-end, split by lane):
+  - R1 glob: `/storage/downsampled/SC2300771/*_R1_001.fastq.gz`
+  - R2 glob: `/storage/downsampled/SC2300771/*_R2_001.fastq.gz`
+- **Whitelist**: `/storage/scRNAseq_output/whitelists/737K-fixed-rna-profiling.txt`
+- **Reference**: `/storage/scRNAseq_output/indices-98-32/star`
+- **Default STAR arguments** (shared across scripts unless noted):
+  - `--soloType CB_UMI_Simple`
+  - `--soloCBstart 1 --soloCBlen 16 --soloUMIstart 17 --soloUMIlen 12`
+  - `--soloCBwhitelist $WHITELIST`
+  - `--readFilesCommand zcat`
+  - `--runThreadN 16` (override per machine capacity)
+  - `--outSAMattributes NH HI nM AS CR UR CB UB GX GN sS sQ sM`
+
+## Stage 0 – Sanity & environment checks
+
+### `00_assert_fixtures.sh`
+Purpose: fail fast if any required input is missing or unreadable.
+- Verifies the whitelist, reference directory, and at least one R1/R2 file exist.
+- Emits a deterministic manifest (`testing/output/manifests/fastq.list`) with matching R1/R2 pairs, sorted by lane.
+- Expected output: script exits 0 and writes the manifest; failure if any file is missing.
+
+### `01_smoke_subset_fastqs.sh`
+Purpose: create a tiny subset (first 1M reads per mate) for quicker local dry runs.
+- Uses `seqtk` or `zcat | head | gzip` fallback to produce `/storage/downsampled/SC2300771/subset/R{1,2}.fastq.gz`.
+- Optional but useful for CI or rapid validation; should be no-op if subset already exists.
+
+## Stage 1 – Baseline coordinate-sorted control
+
+### `10_run_sorted_baseline.sh`
+Purpose: reproduce today’s official STARsolo output for comparison.
+- Consumes the manifest from Stage 0 to feed all lanes: `--readFilesIn $(paste -sd, R1.list) $(paste -sd, R2.list)`.
+- Output root: `testing/output/baseline_sorted`.
+- Key expectations:
+  - Produces `Aligned.sortedByCoord.out.bam` containing CB/UB tags.
+  - Generates the usual Solo matrices under `Solo.out/`.
+  - Logs captured to `Log.final.out`, `Solo.out/Gene/Filtered/features.tsv`, etc.
+- Script should capture checksums (e.g., `md5sum`) for the BAM and every Solo matrix to simplify later comparisons.
+
+### `11_collect_sorted_metrics.sh`
+Purpose: snapshot essential metadata from the baseline run.
+- Derives BAM record count via `samtools idxstats` or `samtools view -c`.
+- Captures `Log.final.out` key statistics (uniquely mapped reads, multi-mappers, etc.) to `testing/output/baseline_sorted/metrics.json`.
+- Serves as the canonical reference for later diff scripts.
+
+## Stage 2 – Two-pass unsorted workflow under test
+
+### `20_run_unsorted_two_pass.sh`
+Purpose: execute the new mode on the same inputs.
+- Output root: `testing/output/unsorted_twopass`.
+- STAR command identical to Stage 1 except:
+  - `--outSAMtype BAM Unsorted`
+  - `--soloAddTagsToUnsorted yes`
+- Script should assert that the tmp container (e.g., `Aligned.out.unsorted.solo.tmp`) is created and subsequently removed.
+- Expected outputs: `Aligned.out.bam` (unsorted, with CB/UB), Solo matrices, logs.
+
+### `21_collect_unsorted_metrics.sh`
+Purpose: gather metrics analogous to Stage 1.
+- Produces `metrics.json` mirroring fields from the sorted run.
+- Confirms record counts, Solo cell/UMI totals, and log stats match the baseline values exactly.
+
+### `22_verify_tmp_trailers.py`
+Purpose: validate the intermediate tmp file layout before pass 2 runs (enable via env `KEEP_SOLO_TMP=1`).
+- If the tmp file is present, iterate through the `[size][payload][trailer]` triplets and ensure `(trailer >> 32)` matches the expected `iReadAll` sequence (monotonic non-decreasing).
+- Fails if any record appears truncated or if the trailer pattern deviates from the sorted-path convention.
+
+## Stage 3 – Cross-run comparisons (identical output guarantees)
+
+### `30_compare_bam_tags.py`
+Purpose: ensure CB/UB (and CR/UR) tags are identical per read.
+- Inputs: `Aligned.sortedByCoord.out.bam` (baseline) and `Aligned.out.bam` (unsorted) after name sorting.
+- Steps:
+  1. Name-sort both BAMs using `samtools sort -n` into temp files.
+  2. Iterate reads in tandem; compare `CB`, `UB`, `CR`, `UR`, `GX`, `GN`, and flag fields.
+  3. Emit a diff report listing any mismatches; exit non-zero if any discrepancy occurs.
+- Should also assert identical record counts and mate pairing flags.
+
+### `31_compare_alignment_qc.py`
+Purpose: verify MAPQ, mate info, and key SAM flags remain unchanged.
+- Extends `30_compare_bam_tags.py` or runs separately to diff core alignment fields (POS, CIGAR, MAPQ, FLAG).
+- Reports the first N mismatches with full context.
+
+### `32_compare_solo_matrices.sh`
+Purpose: guarantee Solo outputs (Gene/GeneFull/filtered/unfiltered) match bit-for-bit.
+- Uses `diff -q`, `md5sum`, or `python -c` to compare each matrix TSV/MTX between baseline and unsorted runs.
+- Confirms that summary JSON/CSV stats are identical.
+
+### `33_compare_logs.sh`
+Purpose: diff STAR log artifacts.
+- Compares `Log.out`, `Log.progress.out`, `Solo.out/*.stats`, etc., ignoring timestamp lines via `grep -v` or `diff --strip-trailing-cr`.
+- Fails if any quantitative line diverges.
+
+### `34_compare_read_distributions.py`
+Purpose: deeper sanity on barcode/cell counts.
+- Aggregates counts per CB from both runs and ensures perfect equality (leverages `pandas` for convenience).
+
+## Stage 4 – Negative / guard-rail tests
+
+### `40_expect_failure_without_flag.sh`
+Purpose: confirm we still reject CB/UB on unsorted BAM when the new flag is absent.
+- Runs the unsorted command **without** `--soloAddTagsToUnsorted`; expects STAR to exit non-zero and emit the original error message.
+
+### `41_expect_success_without_cbub.sh`
+Purpose: ensure legacy unsorted mode without CB/UB remains unaffected.
+- Runs STAR with `--outSAMattributes NH HI nM AS CR UR GX GN` (no CB/UB) and without the flag; validates completion.
+- Verifies that new code paths do not regress legacy behaviour.
+
+### `42_subset_regression_loop.sh`
+Purpose: optional quick regression using the subset FASTQs from Stage 0.
+- Runs both pipelines on the subset in under ~10 minutes, producing smaller outputs for fast iteration.
+
+## Stage 5 – Aggregated orchestrators
+
+### `90_run_all.sh`
+Purpose: top-level driver to execute the entire matrix of tests.
+- Accepts `--subset` to switch between full dataset and the optional subset.
+- Steps:
+  1. `00_assert_fixtures.sh`
+  2. `10_run_sorted_baseline.sh`
+  3. `11_collect_sorted_metrics.sh`
+  4. `20_run_unsorted_two_pass.sh`
+  5. `21_collect_unsorted_metrics.sh`
+  6. `30_compare_bam_tags.py` + `31_compare_alignment_qc.py`
+  7. `32_compare_solo_matrices.sh`
+  8. `33_compare_logs.sh`
+  9. `34_compare_read_distributions.py`
+  10. `40_expect_failure_without_flag.sh`
+  11. Optional subset run (`42_subset_regression_loop.sh`)
+- Summarises results in `testing/output/test-report.json` with a pass/fail status per script.
+
+## Expected identical-output checkpoints
+1. **BAM-level parity** – `30_compare_bam_tags.py` + `31_compare_alignment_qc.py` must show zero differences in SAM fields and CB/UB/CR/UR tags.
+2. **Solo matrix parity** – `32_compare_solo_matrices.sh` ensures counts and filtered sets are byte-identical.
+3. **Log/QC parity** – `11_collect_sorted_metrics.sh` vs. `21_collect_unsorted_metrics.sh` + `33_compare_logs.sh` confirm logs/statistics match exactly.
+4. **Barcode distribution parity** – `34_compare_read_distributions.py` verifies per-CB UMI/read tallies align.
+5. **Failure-mode preservation** – `40_expect_failure_without_flag.sh` guarantees the historical guard-rail still triggers when expected.
+
+Delivering these scripts will give us deterministic, step-by-step confirmation that the two-pass unsorted mode reproduces the behaviour of the existing coordinate-sorted pipeline on real 10x-style data.

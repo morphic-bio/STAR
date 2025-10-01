@@ -15,6 +15,7 @@ public:
     string trInfoDir;
 
     vector <string> trID, geID, geName, geBiotype; //transcript/gene IDs
+    vector <string> geIDCanonical;                 //canonical gene IDs used for ZG tags
     uint32 nTr, nGe; //number of transcript/genes
 
     uint *trS, *trE, *trEmax; //transcripts start,end,end-max

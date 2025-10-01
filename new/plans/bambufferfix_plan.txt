@@ -1,0 +1,89 @@
+# Runbook: BAM Tag Buffer Capacity Fix and Validation
+
+## Prerequisites
+- Repository cloned and working directory set to `/mnt/pikachu/STAR`.
+- Build dependencies for STAR already installed.
+- `samtools` available on PATH.
+- Sufficient permissions to build and run tests.
+
+## Step 1 – Patch `BAMTagBuffer::ensureBucketSize`
+1. Open the implementation file:
+   - Path: `source/BAMTagBuffer.cpp`
+2. Locate the existing `ensureBucketSize` method.
+3. Replace the method body with the following, preserving surrounding includes:
+   ```cpp
+   void BAMTagBuffer::ensureBucketSize(uint64_t iReadAll) {
+       if (iReadAll < readBuckets.size()) {
+           return;
+       }
+
+       size_t newSize = readBuckets.size();
+       if (newSize == 0) {
+           newSize = 1024; // initial capacity to limit reallocations
+       }
+
+       const uint64_t required = iReadAll + 1;
+
+       while (static_cast<uint64_t>(newSize) < required) {
+           if (newSize >= std::numeric_limits<size_t>::max() / 2) {
+               newSize = static_cast<size_t>(required);
+               break;
+           }
+
+           size_t doubled = newSize * 2;
+           if (doubled <= newSize) { // overflow guard
+               newSize = static_cast<size_t>(required);
+               break;
+           }
+
+           newSize = doubled;
+       }
+
+       if (static_cast<uint64_t>(newSize) < required) {
+           newSize = static_cast<size_t>(required);
+       }
+
+       readBuckets.resize(newSize);
+   }
+   ```
+4. Ensure `<limits>` is included near the top of `source/BAMTagBuffer.cpp` if not already present:
+   ```cpp
+   #include <limits>
+   ```
+5. Save the file.
+
+## Step 2 – Rebuild STAR Binary
+1. Change into the source directory:
+   ```bash
+   cd /mnt/pikachu/STAR/source
+   ```
+2. Build the STAR executable:
+   ```bash
+   make STAR
+   ```
+3. Copy the rebuilt binary to the runtime location used by helpers:
+   ```bash
+   cp STAR ../bin/Linux_x86_64/STAR
+   ```
+4. Return to the repository root if desired:
+   ```bash
+   cd /mnt/pikachu/STAR
+   ```
+
+## Step 3 – Run `emit_test.sh`
+1. From `/mnt/pikachu/STAR`, execute the integration test:
+   ```bash
+   ./emit_test.sh
+   ```
+   - The script will reuse existing baselines unless `--force-baseline` is supplied.
+2. Allow the test to finish; it runs two STAR configurations and performs validations.
+3. Confirm the summary prints all checks as `PASSED`.
+
+## Step 4 – Record Results
+1. Review changes with:
+   ```bash
+   git status -sb
+   ```
+2. Capture build/test logs as needed for reporting (e.g., redirect test output to a file if required).
+3. Proceed with additional tasks (commit, PR, etc.) per project process.
+
