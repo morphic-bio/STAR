@@ -65,6 +65,9 @@ void SoloFeature::processRecords()
     readFeatSum->statsOut(*statsStream);
     statsStream->close();
     
+    // Write tag table if requested (after UMI collapse, before matrix output)
+    writeTagTableIfRequested(false);
+    
     time(&rawTime);
     P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Solo: writing raw matrix" <<endl;
 

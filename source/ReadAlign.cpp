@@ -2,11 +2,13 @@
 #include "Parameters.h"
 #include "Transcript.h"
 #include "ReadAlign.h"
+#include "GlobalVariables.h"
 
 ReadAlign::ReadAlign (Parameters& Pin, Genome &genomeIn, Transcriptome *TrIn, int iChunk)
                     : mapGen(genomeIn), genOut(*genomeIn.genomeOut.g), P(Pin), chunkTr(TrIn)
 {
     readNmates=P.readNmates; //not readNends
+    bamRecordIndexPtr = &g_bamRecordIndex;
     //RNGs
     rngMultOrder.seed(P.runRNGseed*(iChunk+1));
     rngUniformReal0to1=std::uniform_real_distribution<double> (0.0, 1.0);

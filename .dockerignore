@@ -1,0 +1,39 @@
+# Git and version control
+.git
+.gitignore
+
+# Documentation
+*.md
+doc/
+docs/
+
+# Testing
+testing/
+
+# Build artifacts (will be built fresh)
+bin/
+source/*.o
+source/STAR
+source/STARlong
+source/STARstatic
+source/Depend.list
+source/parametersDefault.xxd
+source/_STARtmp/
+source/htslib/*.o
+source/htslib/*.a
+source/opal/*.o
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp

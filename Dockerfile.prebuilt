@@ -1,0 +1,36 @@
+# Dockerfile for pre-built STAR binaries
+# First run: ./build_star.sh --static --long
+# Then run: docker build -f Dockerfile.prebuilt -t star:latest .
+
+FROM debian:bookworm-slim
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -r star && useradd -r -g star -s /bin/false star
+
+# Copy pre-built static binaries
+COPY bin/Linux_x86_64_static/STAR /usr/local/bin/STAR
+COPY bin/Linux_x86_64_static/STARlong /usr/local/bin/STARlong
+
+# Set permissions
+RUN chmod +x /usr/local/bin/STAR /usr/local/bin/STARlong
+
+# Create working directory for data
+WORKDIR /data
+RUN chown star:star /data
+
+# Switch to non-root user
+USER star
+
+# Set default command
+CMD ["STAR", "--help"]
+
+# Labels
+LABEL maintainer="STAR Docker Image" \
+      description="STAR RNA-seq aligner (pre-built)" \
+      version="2.7.11b"

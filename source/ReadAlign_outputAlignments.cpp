@@ -2,6 +2,19 @@
 #include "GlobalVariables.h"
 #include "ErrorWarning.h"
 
+namespace {
+inline const char* sanitizeQname(char** readNameMates, uint32_t readNmates, uint32_t mateIdx) {
+    if (mateIdx >= readNmates) {
+        return nullptr;
+    }
+    const char* qptr = readNameMates[mateIdx];
+    if (qptr && qptr[0] == '@') {
+        ++qptr;
+    }
+    return qptr;
+}
+}
+
 void ReadAlign::outputAlignments() {
   
     outBAMbytes=0;
@@ -183,14 +196,36 @@ void ReadAlign::writeSAM(uint64 nTrOutSAM, Transcript **trOutSAM, Transcript *tr
             if (P.outBAMunsorted || P.outBAMcoord) {//BAM output
                 alignBAM(*(trOutSAM[iTr]), nTrOutSAM, iTr, mapGen.chrStart[trOutSAM[iTr]->Chr], (uint) -1, (uint) -1, 0, -1, NULL, P.outSAMattrOrder,outBAMoneAlign, outBAMoneAlignNbytes);
 
-                if (P.outBAMunsorted) {//unsorted
+                if (outBAMsoloTmp != NULL) {//solo tmp mode (two-pass unsorted)
                     for (uint imate=0; imate<P.readNmates; imate++) {//output each mate //not readNends: this is alignment
-                        outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], (imate>0 || iTr>0) ? 0 : (outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1])*2*nTrOutWrite);
+                        uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                        const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), static_cast<uint32_t>(iTr), qnamePtr};
+                        outBAMsoloTmp->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], iReadAll, meta);
                     };
                     if (P.outSAMunmapped.keepPairs && P.readNmates>1 && ( !mateMapped1[0] || !mateMapped1[1] ) ) {//keep pairs && paired reads && one of the mates not mapped in this transcript //not readNends: this is alignment
                         alignBAM(*trOutSAM[iTr], 0, 0, mapGen.chrStart[trOutSAM[iTr]->Chr], (uint) -1, (uint) -1, 0, 4, mateMapped1, P.outSAMattrOrder, outBAMoneAlign, outBAMoneAlignNbytes);
                         for (uint imate=0; imate<P.readNmates; imate++) {//output each mate //not readNends: this is alignment
-                            outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], (imate>0 || iTr>0) ? 0 : (outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1])*2*nTrOutWrite);
+                            uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                            const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), static_cast<uint32_t>(iTr), qnamePtr};
+                            outBAMsoloTmp->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], iReadAll, meta);
+                        };
+                    };
+                } else if (P.outBAMunsorted && outBAMunsorted != NULL) {//regular unsorted mode
+                    for (uint imate=0; imate<P.readNmates; imate++) {//output each mate //not readNends: this is alignment
+                        uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                        const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), static_cast<uint32_t>(iTr), qnamePtr};
+                        outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], (imate>0 || iTr>0) ? 0 : (outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1])*2*nTrOutWrite, meta);
+                    };
+                    if (P.outSAMunmapped.keepPairs && P.readNmates>1 && ( !mateMapped1[0] || !mateMapped1[1] ) ) {//keep pairs && paired reads && one of the mates not mapped in this transcript //not readNends: this is alignment
+                        alignBAM(*trOutSAM[iTr], 0, 0, mapGen.chrStart[trOutSAM[iTr]->Chr], (uint) -1, (uint) -1, 0, 4, mateMapped1, P.outSAMattrOrder, outBAMoneAlign, outBAMoneAlignNbytes);
+                        for (uint imate=0; imate<P.readNmates; imate++) {//output each mate //not readNends: this is alignment
+                            uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                            const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), static_cast<uint32_t>(iTr), qnamePtr};
+                            outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], (imate>0 || iTr>0) ? 0 : (outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1])*2*nTrOutWrite, meta);
                         };
                     };
                 };
@@ -221,8 +256,16 @@ void ReadAlign::writeSAM(uint64 nTrOutSAM, Transcript **trOutSAM, Transcript *tr
             if ( P.outBAMcoord || (P.outBAMunsorted && !P.outSAMunmapped.keepPairs) ) {//BAM output
                 alignBAM(*trBestSAM, 0, 0, mapGen.chrStart[trBestSAM->Chr], (uint) -1, (uint) -1, 0, unmapType, mateMapped, P.outSAMattrOrder, outBAMoneAlign, outBAMoneAlignNbytes);
                 for (uint imate=0; imate<P.readNmates; imate++) {//alignBAM output is empty for mapped mate, but still need to scan through it //not readNends: this is alignment
-                    if (P.outBAMunsorted && !P.outSAMunmapped.keepPairs) {
-                        outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], imate>0 ? 0 : outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1]);
+                    if (outBAMsoloTmp != NULL && !P.outSAMunmapped.keepPairs) {
+                        uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                        const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), 0u, qnamePtr}; // alignIdx=0 for unmapped
+                        outBAMsoloTmp->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], iReadAll, meta);
+                    } else if (P.outBAMunsorted && outBAMunsorted != NULL && !P.outSAMunmapped.keepPairs) {
+                        uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                        const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), 0u, qnamePtr}; // alignIdx=0 for unmapped
+                        outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], imate>0 ? 0 : outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1], meta);
                     };
                     if (P.outBAMcoord) {//KeepPairs option does not affect for sorted BAM since we do not want multiple entries for the same unmapped read
                         outBAMcoord->coordOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], iReadAll<<32);
@@ -237,11 +280,22 @@ void ReadAlign::writeSAM(uint64 nTrOutSAM, Transcript **trOutSAM, Transcript *tr
         if (P.outBAMcoord || P.outBAMunsorted || P.quant.trSAM.bamYes) {//BAM output
             alignBAM(*trBestSAM, 0, 0, mapGen.chrStart[trBestSAM->Chr], (uint) -1, (uint) -1, 0, unmapType, mateMapped, P.outSAMattrOrder, outBAMoneAlign, outBAMoneAlignNbytes);
             for (uint imate=0; imate<P.readNmates; imate++) {//output each mate //not readNends: this is alignment
-                if (P.outBAMunsorted) {
-                    outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], imate>0 ? 0 : outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1]);
+                if (outBAMsoloTmp != NULL) {
+                    uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                    const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), 0u, qnamePtr}; // alignIdx=0 for unmapped
+                    outBAMsoloTmp->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], iReadAll, meta);
+                } else if (P.outBAMunsorted && outBAMunsorted != NULL) {
+                    uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                    const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), 0u, qnamePtr}; // alignIdx=0 for unmapped
+                    outBAMunsorted->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], imate>0 ? 0 : outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1], meta);
                 };
                 if (P.quant.trSAM.bamYes) {
-                    outBAMquant->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], imate>0 ? 0 : outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1]);
+                    uint64_t recordIdx = (*bamRecordIndexPtr)++;
+                    const char* qnamePtr = sanitizeQname(readNameMates, P.readNmates, static_cast<uint32_t>(imate));
+                        BAMRecordMeta meta{recordIdx, iReadAll, static_cast<uint32_t>(imate), 0u, qnamePtr}; // alignIdx=0 for unmapped
+                    outBAMquant->unsortedOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], imate>0 ? 0 : outBAMoneAlignNbytes[0]+outBAMoneAlignNbytes[1], meta);
                 };
                 if (P.outBAMcoord) {
                     outBAMcoord->coordOneAlign(outBAMoneAlign[imate], outBAMoneAlignNbytes[imate], iReadAll<<32);

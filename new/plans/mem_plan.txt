@@ -1,0 +1,79 @@
+# Memory Debug Plan – ASan Build & Targeted Test
+
+## Goal
+Compile STAR with AddressSanitizer (ASan) so memory errors during the tag-table workflow are surfaced quickly, and run a lightweight script that triggers `--soloWriteTagTable` and `--soloAddTagsToUnsorted` to reproduce issues.
+
+## Phase 0 – Snapshot
+1. `git status -sb`
+2. Optional: `./emit_test.sh --force-baseline` to verify current behavior before instrumentation.
+
+## Phase 1 – Enable ASan Flags
+1. Edit `source/Makefile` (or central flags file) and append sanitizers when `ASAN=1`:
+   ```make
+   ifdef ASAN
+   CFLAGS   += -fsanitize=address -fno-omit-frame-pointer -O1
+   CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -O1
+   LDFLAGS  += -fsanitize=address
+   endif
+   ```
+   Keep existing optimization flags; sanitize block should be additive.
+2. Note usage in docs: `ASAN=1 make STAR` or `ASAN=1 ./build_star.sh`.
+
+## Phase 2 – Build Instrumented Binary
+1. Recommend clean build:
+   ```bash
+   ASAN=1 make clean
+   ASAN=1 make STAR
+   ```
+2. Confirm linkage: `ldd STAR | grep asan`.
+
+## Phase 3 – Minimal Tag-Table Script
+1. Create `mem_test_tags.sh` with executable permissions. Script outline:
+   ```bash
+   #!/usr/bin/env bash
+   set -euo pipefail
+
+   STAR_BIN=${STAR_BIN:-./STAR}
+   GENOME_DIR=${GENOME_DIR:-/path/to/genome}
+   FASTQ_DIR=${FASTQ_DIR:-testing/sample1}
+   WHITELIST=${WHITELIST:-/path/to/whitelist.txt}
+   OUTDIR=${OUTDIR:-mem_test_output}
+
+   rm -rf "$OUTDIR" "$OUTDIR"_STARtmp
+   mkdir -p "$OUTDIR"
+
+   "$STAR_BIN" \
+     --runThreadN 4 \
+     --genomeDir "$GENOME_DIR" \
+     --readFilesIn "$FASTQ_DIR"/R1.fastq.gz "$FASTQ_DIR"/R2.fastq.gz \
+     --readFilesCommand zcat \
+     --soloType CB_UMI_Simple \
+     --soloCBwhitelist "$WHITELIST" \
+     --soloUMIlen 12 \
+     --soloStrand Forward \
+     --outSAMtype BAM Unsorted \
+     --soloAddTagsToUnsorted yes \
+     --soloWriteTagTable Default \
+     --outFileNamePrefix "$OUTDIR/"
+   ```
+   Use existing small fixtures (`testing/` data) to keep runtime minimal while hitting the tag-table code path.
+
+## Phase 4 – Run Under ASan
+1. Execute: `ASAN_OPTIONS=detect_leaks=1 ./mem_test_tags.sh 2>&1 | tee mem_test.log`
+2. Inspect `mem_test.log` for `ERROR: AddressSanitizer` reports. Record stack traces and offending lines.
+3. Tweak `ASAN_OPTIONS` as needed (`abort_on_error=1`, suppressions for third-party libs).
+
+## Phase 5 – Iterate / Extend
+1. If failures surface, reproduce with different inputs (additional FASTQs, thread counts) to isolate the trigger.
+2. Consider complementary tooling (heaptrack, massif) using the same script for allocation profiling.
+
+## Phase 6 – Cleanup
+1. `make clean` after debugging to remove ASan artifacts.
+2. Rebuild without sanitizers (`make STAR`) for production runs.
+
+## Phase 7 – Document Findings
+1. Log ASan issues (stack trace, sample, reproduction steps).
+2. Keep `mem_test_tags.sh` under version control for future regression checks or CI integration.
+
+# End of plan
+

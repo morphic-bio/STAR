@@ -1,0 +1,112 @@
+# Plan: Implement `--soloWriteTagTable` Export Path
+
+## Goal
+Add a new CLI flag that tells STAR to emit the corrected CB/UB assignments into a sidecar table instead of (or in addition to) patching them into the unsorted BAM. When the flag is active the existing two-pass temp BAM should be bypassed, but Solo still performs all barcode/UMI correction work during the single mapping pass.
+
+### Target behaviour
+- New option: `--soloWriteTagTable <value>` with default `None`.
+  - `None` (case-insensitive) keeps current behaviour.
+  - `Default` writes to `<outFileNamePrefix>Aligned.out.cb_ub.tsv` (sidecar next to BAM outputs).
+  - Any other value is interpreted as a path (relative paths resolve against `$PWD`).
+- When the option resolves to an actual filepath:
+  - Always ensure `pSolo.readInfoYes[pSolo.samAttrFeature]` is true so Solo records per-read CB/UB corrections (this is already true for Gene with current defaults).
+  - Skip opening the solo tmp stream (`Aligned.out.unsorted.solo.tmp`). Instead, leave unsorted BAM output in legacy mode unless `--soloAddTagsToUnsorted yes` is explicitly requested.
+  - After Solo finishes collapsing UMIs, write a sidecar table that is **strictly aligned** with the order STAR emits alignments into the unsorted BAM. Each BAM record corresponds to exactly one line in the table, so a sequential BAM reader can consume them in lockstep.
+  - The table uses tab-separated columns with the exact schema:
+    1. `bam_record_index` (0-based; incremented for every alignment record across mates and multimappers).
+    2. `iReadAll` (0-based STAR read counter; identical for both mates of a read).
+    3. `mate` (0 for R1, 1 for R2).
+    4. `align_idx` (0-based index of this alignment among multimappers for the read).
+    5. `qname` (original read name).
+    6. `CB` (corrected barcode string or `-` if unavailable).
+    7. `UB` (corrected UMI string or `-`).
+    8. `status` (`OK`, `NO_CB`, `NO_UMI`, or `NO_CB_UMI`).
+  - Leave the final BAM tag-free unless `--soloAddTagsToUnsorted` was requested alongside the new flag. If both flags are on, run both pathways: keep existing two-pass temp file flow AND produce the table.
+
+## Step-by-step implementation
+
+### 1. Parameter plumbing
+1. Update defaults:
+   - `source/parametersDefault`: add `soloWriteTagTable None` next to other Solo flags (see around line 916 for `soloAddTagsToUnsorted`).
+2. Extend `ParametersSolo`:
+   - In `source/ParametersSolo.h`, add members:
+     ```cpp
+     string writeTagTableStr;   // raw CLI value
+     bool   writeTagTableEnabled = false;
+     string writeTagTablePath;  // resolved absolute path
+     ```
+     Place them near existing `addTagsToUnsortedStr` for consistency.
+3. Register CLI flag in `source/Parameters.cpp` (look near line 301 where `soloAddTagsToUnsorted` is pushed). Append another `ParameterInfoScalar<string>` for `"soloWriteTagTable"` that stores into `pSolo.writeTagTableStr`.
+4. Parse and validate in `source/ParametersSolo.cpp`:
+   - Mirror the structure used in the `soloAddTagsToUnsorted` block (starts near line 26).
+   - Accepted values: case-fold `none` → disabled; `default` → use `P.outFileNamePrefix + "Aligned.out.cb_ub.tsv"`; otherwise treat value as path.
+   - Resolve relative paths with `realpath`-style helper `pathParameterConcat` (used elsewhere in Solo code) so downstream output code receives an absolute path.
+   - Set `writeTagTableEnabled` / `writeTagTablePath` accordingly.
+   - Emit a fatal error if the caller passes `yes` or other unexpected token that is not `default` or `none` unless you explicitly want to alias `yes` to `default`.
+5. Interaction validation:
+   - In the section around lines 422-430 that currently enforces `--soloAddTagsToUnsorted` when CB/UB are requested in BAM attributes, loosen the condition: allow CB/UB attributes without `--soloAddTagsToUnsorted` if `writeTagTableEnabled` is true.
+   - Add a warning when both flags are off but CB/UB attributes are requested, explaining that the tags will be absent from BAM and no sidecar is produced.
+
+### 2. Ensure read-level metadata is available
+1. `readInfo` already tracks the corrected CB/UMI (`source/SoloFeature_countCBgeneUMI.cpp:16-45`). No extra storage is required, but confirm `pSolo.readInfoYes[pSolo.samAttrFeature]` is enabled in all pipelines. If any code path disables it when injection is off, force-enable when the new flag is active.
+2. Capture the original read name so column 5 (`qname`) can be populated:
+   - Add a new container, e.g. `vector<string> readNames;` inside `SoloFeature` that is instantiated only when `writeTagTableEnabled` is true.
+   - Populate it in `ReadAlignChunk_processChunks.cpp` (search for `P.iReadAll`) at the moment the synthetic read name is built. Store one entry per read so both mates can reference it via `iReadAll`.
+   - Consider freeing the vector after `writeTagTableIfRequested` completes to release memory.
+
+### 3. Bypass solo tmp writer when appropriate
+1. In `source/ReadAlignChunk.cpp` (constructor) locate the block that switches between `BAMoutputSoloTmp` and `BAMoutput`. Add a third branch:
+   ```cpp
+   if (P.pSolo.addTagsToUnsorted) { ... }
+   else if (P.pSolo.writeTagTableEnabled) { /* legacy unsorted BAM path */ }
+   else { ... }
+   ```
+   The middle branch should explicitly set `chunkOutBAMsoloTmp = NULL` so the temp writer is never instantiated when we only need the table.
+2. The existing `else` branch already covers the legacy path; reuse it to avoid duplication. The key requirement is that `addTagsToUnsorted` must be the only condition that instantiates `BAMoutputSoloTmp`.
+
+### 4. Emit the tag table after Solo processing
+1. Add a helper in `source/SoloFeature.h`:
+   ```cpp
+   void writeTagTableIfRequested(bool filteredPass);
+   ```
+   Keep it private to `SoloFeature`.
+2. Implement the helper in a new file (e.g. `source/SoloFeature_writeTagTable.cpp`) or append to `SoloFeature_outputResults.cpp`. Recommended behaviour:
+   - Only run when `P.pSolo.writeTagTableEnabled` is true and `featureType == pSolo.features[pSolo.featureInd[pSolo.samAttrFeature]]` (i.e. the feature responsible for CB/UB tags—usually Gene).
+   - Open the output path (from `P.pSolo.writeTagTablePath`). Reuse `ofstrOpen` for logging/permissions.
+   - Emit the header comment (`# bam_record_index	iReadAll	mate	align_idx	qname	CB	UB	status`) followed by one line per BAM record in the exact order they are produced.
+   - Maintain a running `bam_record_index` counter that increments every time `outBAMsoloTmp` *would* have written. Reuse the same counter when generating the sidecar so it matches streaming order.
+   - For each record, populate the columns as defined above (CB/UB `-` when missing, `status` summarizing which fields are absent).
+   - Flush and close; log success to `P.inOut->logMain`.
+2. Decide where to call the helper. Recommended placement:
+   - Inside `SoloFeature::processRecords()` after `collapseUMIall()` completes and before `outputResults()` is invoked.
+   - Guard the call so it runs once per feature and only when `writeTagTableEnabled`.
+3. If you store read names, ensure the helper frees that memory (clear the vector) afterwards to reduce peak RAM.
+
+### 5. Documentation & tooling
+1. Update CLI docs:
+   - `docs/two_pass_unsorted_usage.md` (add a subsection describing the new flag, how it interacts with `--soloAddTagsToUnsorted`, and the output format of the table).
+   - `docs/two_pass_unsorted_tech.md` (mention that the temp BAM is optional when exporting tags separately).
+   - `CHANGES_FORK.md` (new entry under “Added”).
+2. Sample scripts (`runSTAR.sh`, `runSTAR_docker.sh`, `integration_test.sh`) should demonstrate the new flag. Keep existing tests that cover the old behaviour.
+
+### 6. Testing
+1. Extend `integration_test.sh`:
+   - Add a test case that runs STAR with `--soloWriteTagTable Default` and `--soloAddTagsToUnsorted no`. Verify:
+     - Exit status is 0.
+     - The sidecar file exists and contains the expected number of lines.
+     - `Aligned.out.unsorted.solo.tmp` is absent.
+   - Add another case where both `--soloAddTagsToUnsorted yes` and `--soloWriteTagTable Default` are supplied to ensure both outputs are produced.
+2. Update or add unit-style checks in `testing.plan` to include new assertions.
+3. If you capture read names, write a quick validator (python) to spot-check name alignment with `iReadAll`.
+
+### 7. Cleanup considerations
+- Do not remove the temp file deletion logic; it will still run when the old two-pass mode is requested.
+- Ensure the new helper honours `--runMode soloCellFiltering` (flag should be ignored in that mode).
+- Remember to add the new source file to `source/Makefile` if you break the implementation out of existing compilation units.
+
+## Rollout checklist
+- [ ] Code changes compiled (`make STAR`) and basic run executed.
+- [ ] New flag documented (`docs/two_pass_unsorted_usage.md`).
+- [ ] Tests updated and passing (`integration_test.sh`).
+- [ ] `testing.plan` refreshed with new scenario.
+- [ ] Scripts (`runSTAR.sh`, `runSTAR_docker.sh`) optionally showcase the new flag in comments or defaults.

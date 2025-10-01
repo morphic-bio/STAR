@@ -1,0 +1,107 @@
+# saveRAM Plan v3 – Remove Cached QNAME/CB/UB From BAMTagBuffer
+
+## Goal
+Refactor `BAMTagBuffer` so it no longer stores QNAME, CB, or UB data. Keep only alignment bookkeeping needed to write the tag table, and derive CB/UB/status from existing `readInfo` during the final write. Update tests to validate the new flow by hydrating QNAMEs with `samtools`.
+
+## Prerequisites
+1. Working tree synced with latest changes (no uncommitted edits unrelated to this task).
+2. Build dependencies installed; able to run `make STAR`.
+3. `samtools` available on `$PATH`.
+4. Familiarity with running `emit_test.sh` and interpreting its output.
+
+## Phase 1 – Snapshot Current State
+1. `git status -sb`.
+2. Optional: run `./emit_test.sh` to capture baseline behavior.
+
+## Phase 2 – Trim BAMTagEntry
+1. Edit `source/BAMTagBuffer.h`.
+   - In `struct BAMTagEntry`, keep only: `recordIndex`, `iReadAll`, `mate`, `alignIdx`, `groupIndex` (or a renamed field that points to a read slot).
+   - Remove any unused includes that become redundant (e.g., `<unordered_map>` if nothing else uses it).
+2. Reorder fields to minimize padding (e.g., place `mate`/`alignIdx` before the pointer/indices) if desired, but keep existing types unless you have clear bounds.
+
+## Phase 3 – Delete QnamePool and CB/UB Fields
+1. Still in `source/BAMTagBuffer.h`:
+   - Delete the `QnamePool` struct definition.
+   - Delete `ReadGroup::qnameId`, `cbIdx`, `umiPacked`, `statusCode`, and `entryIdx`.
+   - Replace with minimal shared data:
+     ```cpp
+     struct ReadGroup {
+         uint32_t firstEntryIdx;  // index into entries, UINT32_MAX when unused
+         uint32_t entryCount;     // number of alignments for this read
+     };
+     ```
+   - Update default constructor to initialize these two fields to sentinel values.
+   - Remove declarations of `packUmi`, `unpackUmi`, `statusToStr`, `computeStatusCode` from the class interface.
+   - Remove the `clear()` method’s dependency on QNAME pool.
+2. Update forward declarations or includes that are now unused.
+
+## Phase 4 – Rewrite BAMTagBuffer.cpp
+1. Remove the implementations of `packUmi`, `unpackUmi`, `statusToStr`, `computeStatusCode`, and all `QnamePool` methods.
+2. In `BAMTagBuffer` constructor and destructor:
+   - Drop reservations that assumed `ReadGroup` carried vectors.
+3. Update `getOrCreateGroup`:
+   - Ensure `readGroups` grows to `iReadAll + 1`.
+   - When initializing a new group, set `firstEntryIdx = entries.size()` and `entryCount = 0` if it is the first alignment for this read.
+4. Update `append`:
+   - Remove call to `qnamePool.intern`.
+   - After pushing the entry, if `firstEntryIdx` is sentinel, set it to the index of this entry.
+   - Increment `entryCount`.
+5. Update `finalizeTag` to one of the following options (choose and implement):
+   - **Option A (preferred)**: Delete the method entirely; rely on `readInfo` during write. Remove all calls to `finalizeTag`.
+   - **Option B**: Keep `finalizeTag` but only ensure the read group exists (no-op otherwise). If you keep it, update callers to expect no CB/UB caching.
+   - This plan assumes Option A; remove the method and adjust headers/callers accordingly.
+6. Remove `reserveReadCapacity` if no longer needed; otherwise, ensure it simply resizes `readGroups` without initializing extra fields.
+7. Rewrite `writeTagTable`:
+   - Change signature to accept the read-level data needed to reconstruct CB/UB/status. Example signature:
+     ```cpp
+     void writeTagTable(const std::string& outputPath,
+                        const std::vector<readInfoStruct>& readInfo,
+                        const std::vector<std::string>& cbWLstr,
+                        size_t umiLength);
+     ```
+   - Before writing, keep the existing sort by `recordIndex`.
+   - For each entry, derive QNAME and CB/UB:
+     * Fetch QNAME by streaming the BAM: **instead of doing it here**, the TSV will omit QNAME (Column removed). Document this change in Phase 6.
+     * Fetch CB/UB from `readInfo[entry.iReadAll]` and convert to strings as done elsewhere (`convertNuclInt64toString`).
+     * Compute status inline based on presence/absence of CB/UB.
+   - Emit header without the QNAME column: `# bam_record_index	iReadAll	mate	align_idx	CB	UB	status`.
+8. Remove the `qnamePool` cleanup in `clear()` and ensure `readGroups` and `entries` reset appropriately.
+
+## Phase 5 – Update Call Sites
+1. `source/SoloFeature_collapseUMIall.cpp`:
+   - Remove calls to `bamTagBuffer->finalizeTag(...)` inside `finalizeTagTableFromReadInfo()`.
+   - If the function becomes empty, keep it for future use or remove it and update the header.
+2. `source/SoloFeature_writeTagTable.cpp`:
+   - Update the `writeTagTable` call to pass `readInfo` and any additional arguments you added in Phase 4.
+   - Log message should note that QNAME is no longer in the TSV.
+3. Verify no other files reference removed helpers. Use `rg "packUmi"`, `rg "statusToStr"`, `rg "QnamePool"`, etc., to ensure there are no leftover references.
+
+## Phase 6 – Document Format Change
+1. Update user-facing docs or comments that describe the tag table columns (search for `writeTagTablePath` or `# bam_record_index`).
+2. Mention that the TSV no longer includes QNAME and that downstream tooling should use `recordIndex` to hydrate read names if needed.
+
+## Phase 7 – Build and Run Tests
+1. `cd source && make STAR`.
+2. Copy the binary if your workflow requires it (e.g., `cp STAR ../bin/Linux_x86_64/STAR`).
+3. Return to repo root.
+4. Run `./emit_test.sh`. Allow it to fail until we update the test (next phase).
+
+## Phase 8 – Enhance emit_test.sh With QNAME Validation
+1. Edit `emit_test.sh` (repo root).
+2. After the existing STAR run that produces the tag table, insert steps to:
+   - Use `samtools view -n <BAM_PATH>` to generate QNAME-sorted output.
+   - Extract the QNAME column and pair it with the `recordIndex` from the tag table (e.g., with `awk` and `paste`).
+   - Compare the hydrated table against the expected baseline (likely in `emit_test_output`).
+3. Ensure the script fails with a clear message if `samtools` is missing.
+4. Update baseline data or comparison logic so the test validates both the TSV content (sans QNAME) and the QNAME hydration stage.
+
+## Phase 9 – Rerun Tests and Snapshot
+1. Rerun `./emit_test.sh` and ensure it passes, including the new samtools stage.
+2. Optionally run other smoke tests (`./integration_test.sh`).
+3. `git status -sb` to review modified files.
+4. Capture notes about RAM usage improvements if observed.
+
+## Deliverables
+- Clean diffs for `source/BAMTagBuffer.h/.cpp`, `source/SoloFeature_*` files touched, and `emit_test.sh`.
+- Updated test baselines reflecting the column change.
+- Internal documentation noting the absence of QNAME in the TSV and the recovery procedure via samtools.

@@ -1,0 +1,85 @@
+# Serialize Plan – Binary CB/UB Tag Stream (v2)
+
+## Goal
+Further shrink STAR’s tag-bookkeeping by:
+- Eliminating unused per-alignment fields (`recordIndex`, `alignIdx`, `mate`, padding).
+- Emitting only the read ID needed to index `readInfo`.
+- Extending the binary header to include an explicit record count for downstream validation.
+
+## Updated Binary Format
+- Header: 4 × uint64_t (little-endian)
+  1. `statusBits` (always 1)
+  2. `cbBits`
+  3. `umiBits`
+  4. `recordCount` (number of payload records that follow)
+- Records: packed bit stream per alignment
+  * `status` (1 bit)
+  * `cbIdx` (`cbBits` bits, 0 sentinel)
+  * `umiPacked` (`umiBits` bits, 0 sentinel)
+  * Records remain byte-aligned.
+
+## Prerequisites
+1. Working tree snapshot (`git status -sb`).
+2. Current binary writer in place (previous plan executed).
+3. Awareness of flex-side plan update (`bam_to_counts_serialized_tags_plan.txt`).
+
+## Phase 0 – Snapshot
+1. `git status -sb`.
+2. Optional: run `./emit_test.sh` for baseline.
+
+## Phase 1 – Slim BAMTagEntry Further
+1. Edit `source/BAMTagBuffer.h`:
+   - Change `BAMTagEntry` to only
+     ```cpp
+     struct BAMTagEntry {
+         uint32_t readId; // iReadAll truncated to 32 bits
+     };
+     ```
+   - Update constructors accordingly and remove unused includes.
+2. Update safeguards in `append()` to only check `meta.iReadAll <= UINT32_MAX`.
+3. Remove sort-by-`recordIndex` requirement (since field is gone). If deterministic output is still desired, maintain append order (already readId-based) or store readId/append index if needed.
+
+## Phase 2 – Adjust Binary Writer Header
+1. Update `TagStreamHeader` struct to include `recordCount`.
+   ```cpp
+   struct TagStreamHeader {
+       uint64_t statusBits;
+       uint64_t cbBits;
+       uint64_t umiBits;
+       uint64_t recordCount;
+   };
+   ```
+2. Update constructor(s) and `writeHeader()` to emit four uint64_t values.
+3. Modify STAR log messages to mention record count.
+
+## Phase 3 – Update writeTagBinary Logic
+1. Remove sorting by `recordIndex` (no longer present). If stable ordering is required, rely on insertion order; otherwise document relaxed ordering.
+2. Before iterating, compute `recordCount = entries.size()` and set in header.
+3. When writing records, continue skipping invalid `readId >= readInfo.size()`, but track counts:
+   - `recordsWritten++` for each successful entry.
+4. After loop, verify `recordsWritten == recordCount` (sanity check). If not, adjust header or log warning (choice: subtract skipped entries before writing header or error out).
+5. Consider writing header after filtering invalid entries; easiest is to pre-count valid entries, set header count accordingly, then write header followed by records.
+
+## Phase 4 – Update SoloFeature Writer
+1. Ensure `writeTagTableIfRequested` now computes `validRecordCount` (if necessary) or simply relies on buffer method.
+2. Confirm `pSolo.bamTagBuffer->clear()` still works with new entry layout.
+
+## Phase 5 – Housekeeping
+1. Remove references to dropped fields in comments, docs.
+2. Update any debugging or logging that mentioned `recordIndex`/`alignIdx`/`mate`.
+3. Adjust any unit tests or tooling relying on previous structure.
+
+## Phase 6 – Build & Validate
+1. `cd source && make STAR`.
+2. Run `./emit_test.sh`, `./tag_test.sh`, `./integration_test.sh` after updating expectations.
+3. Verify new binary file includes 32-byte header (4×8) and size matches `recordCount` * bytes/record + header.
+
+## Phase 7 – Measurement
+1. Compare RAM usage (expect ~75% reduction in entry vector vs earlier 16-byte struct).
+2. Confirm binary file size unchanged aside from extra 8-byte header field.
+
+## Phase 8 – Wrap-Up
+1. `git status -sb` to review diffs.
+2. Document format change (header now 4 fields, record count semantics).
+3. Coordinate with flex repo to consume new format.
+

@@ -22,3 +22,34 @@ source/STAR
 *.pbxproj
 *.plist
 *.xcuserstate
+
+# Test outputs and data in new/ directory structure
+new/testing/outputs/
+new/testing/data/*.bam
+new/testing/data/*.fastq.gz
+new/testing/data/subset/
+
+# Volatile log files (should not be committed)
+log
+log2
+Log.out
+Log.progress.out
+debug_log
+mem_test.log
+runstar_output.log
+*.log
+
+# Temporary STAR output directories
+_STARtmp/
+Solo.out/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Cursor-specific
+.cursorindexingignore
+.specstory

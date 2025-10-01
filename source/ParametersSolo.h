@@ -12,6 +12,7 @@
 
 class Parameters;
 class ParametersSolo;
+class BAMTagBuffer; // Forward declaration
 
 class UMIdedup {
 public:
@@ -73,6 +74,9 @@ class ParametersSolo {
 public:
     Parameters *pP;
     bool yes;
+    
+    // Destructor to clean up BAMTagBuffer
+    ~ParametersSolo();
 
     //chemistry, library etc
     string typeStr;
@@ -197,6 +201,16 @@ public:
 
     bool samAttrYes;//post-processed SAM attributes: error-corrected CB and UMI
     int32 samAttrFeature;//which feature to use for error correction
+    
+    //two-pass unsorted CB/UB injection
+    string addTagsToUnsortedStr;//string parameter input
+    bool addTagsToUnsorted;//whether to add CB/UB tags to unsorted BAM via two-pass mode
+    
+    //tag table export
+    string writeTagTableStr;//raw CLI value
+    bool writeTagTableEnabled = false;//whether to export CB/UB tags to sidecar table
+    string writeTagTablePath;//resolved absolute path
+    BAMTagBuffer* bamTagBuffer = nullptr;//shared buffer for collecting BAM record metadata
 
     //processing
     uint32 redistrReadsNfiles; //numer of files to resditribute reads into

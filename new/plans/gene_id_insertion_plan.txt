@@ -1,0 +1,196 @@
+# Adding Custom `ZG` (gene set) and `ZX` (overlap status) BAM Tags to STAR
+
+This version of the plan is test-first on purpose. Every stage is gated by the
+STAR integration test harness (`./testSTAR.sh`) and the curated gene allowlist
+(`filtered_gene_names.txt`, the "filtered_gene_list" the tests are built
+around). Do not advance to the next stage unless the checkpoint script exits 0.
+
+---
+
+## Stage 0 — Guardrail Tests (must pass before coding)
+
+- From the repo root run the harness to regenerate the golden outputs:
+  ```bash
+  ./testSTAR.sh
+  ```
+  This populates `testing/Aligned.out.bam` plus auxiliary outputs using the
+  filtered FASTQs that already live in the repo.
+- Immediately verify the run consumed the correct gene universe. The BAM emitted
+  today does **not** contain `ZG`/`ZX`, so we check the existing annotations to
+  guarantee our fixture is sane:
+  ```bash
+  samtools view testing/Aligned.out.bam \
+    | python - <<'PY'
+import sys, json
+from collections import Counter
+
+allowed = {line.strip() for line in open('filtered_gene_names.txt') if line.strip()}
+observed_genes = Counter()
+for line in sys.stdin:
+    if line.startswith('@'):
+        continue
+    fields = line.rstrip().split('\t')
+    gx = [f for f in fields if f.startswith('GX:Z:')]
+    if not gx:
+        continue
+    genes = gx[0][5:].split(',')
+    observed_genes.update(genes)
+extra = sorted(set(observed_genes) - allowed)
+missing = sorted(allowed - set(observed_genes))
+if extra or missing:
+    raise SystemExit(f"Gene fixtures out of sync. extra={extra} missing={missing}")
+print('Fixture check passed:', len(observed_genes), 'genes seen')
+PY
+  ```
+  *Guardrail:* if this script fails, fix the fixture alignment or
+  `filtered_gene_names.txt` before touching the code.
+- Snapshot baseline metrics for later comparison:
+  ```bash
+  samtools stats testing/Aligned.out.bam > testing/baseline.stats
+  cp testing/ReadsPerGene.out.tab testing/ReadsPerGene.out.tab.baseline
+  ```
+  These files become the reference when we assert no regressions once the new
+  tags exist.
+
+---
+
+## Stage 1 — Trace Where Gene Metadata Lives
+
+**Objective:** confirm the exact structs/arrays that carry per-alignment gene
+sets and overlap types so we can expose them without guessing.
+
+1. Inspect the following files and log the precise members in your checkout:
+   - `source/ReadAnnotations.h` — identify `annotFeatures[SoloFeatureTypes::Gene]`
+     fields used in the test BAM.
+   - `source/Transcriptome_classifyAlign.cpp`
+   - `source/Transcriptome_alignExonOverlap.cpp`
+   - `source/ReadAlign_output.cpp` or the equivalent writer in this fork.
+2. Instrument temporary logging if needed (e.g., dump `ovType` for the first few
+   reads) but keep the diff local.
+
+**Test checkpoint:** rebuild (`cmake --build build --target STAR -- -j`) and run
+`./testSTAR.sh`. The Stage 0 Python guard must still pass, and the baseline
+`samtools stats` delta should be zero except for timestamps. If the fixture check
+fails, undo the instrumentation before proceeding.
+
+---
+
+## Stage 2 — Surface Gene IDs Cleanly
+
+**Objective:** make `ReadAlign` (or the emitting component) aware of the gene
+ID strings without recomputing them in the hot loop.
+
+Implementation notes (carry over from the prior plan):
+- Prefer adding lightweight getters on `Transcriptome` (e.g.,
+  `Transcriptome::geneId(uint32_t idx) const`).
+- Thread const pointers/references instead of copying large structs.
+- Keep helper code in a new pair such as `source/ZGZXTags.{h,cpp}` and register
+  it in `source/CMakeLists.txt` if required by this fork.
+
+**Test checkpoint:**
+1. Rebuild the binary.
+2. Run `./testSTAR.sh`.
+3. Validate the guard script from Stage 0.
+4. Add a new smoke script (fail-fast gate once `ZG` exists, but it can be staged
+   now) so that the harness becomes self-verifying:
+   ```bash
+   cat > testing/assert_zg_zx.py <<'PY'
+import sys, os
+import pysam
+
+bam_path = sys.argv[1]
+allowed = {line.strip() for line in open(sys.argv[2]) if line.strip()}
+with pysam.AlignmentFile(bam_path, 'rb') as bam:
+    for rec in bam:
+        if rec.has_tag('ZG'):
+            zg = set(rec.get_tag('ZG').split(','))
+            if not zg <= allowed:
+                raise SystemExit(f"Unexpected genes in {rec.query_name}: {zg - allowed}")
+        if rec.has_tag('ZX'):
+            zx = rec.get_tag('ZX')
+            if zx not in {'none','exonic','intronic','spanning'}:
+                raise SystemExit(f"Unexpected ZX={zx} for {rec.query_name}")
+print('ZG/ZX tags valid')
+PY
+   ```
+   (Install `pysam` in the dev environment if it is not already available.)
+5. Wire the script into `testSTAR.sh` (after STAR finishes) so the harness fails
+   automatically when tags go missing or contain wrong genes. Do **not** proceed
+   until the harness exits 0 end-to-end.
+
+---
+
+## Stage 3 — Emit `ZG` / `ZX` in SAM and BAM Paths
+
+**Objective:** append the new optional tags everywhere STAR writes alignments.
+
+Implementation checklist:
+- In the SAM builder (`ReadAlign::alignBufferSAM` or equivalent) append `ZG:Z:`
+  and `ZX:Z:` right after existing gene tags.
+- Mirror the logic inside the BAM writer (`outBAMoneAlign*`). Reuse formatted
+  strings to avoid duplicate work and adjust byte counters if necessary.
+- Ensure both the unsorted and sorted BAM flows get the tags. Search for the
+  functions invoked by `soloAddTagsToUnsorted` to avoid missing a code path.
+- Keep allocations outside tight loops (reserve buffers, reuse string objects).
+
+**Test checkpoint:**
+1. Rebuild.
+2. Run `./testSTAR.sh`. The script now enforces three things automatically:
+   - STAR run finishes successfully.
+   - `testing/assert_zg_zx.py testing/Aligned.out.bam filtered_gene_names.txt`
+     exits 0.
+   - Baseline stats still match (`cmp testing/baseline.stats testing/run.stats`
+     if you capture a fresh file inside the harness).
+3. Manually spot-check the first few reads to confirm formatting:
+   ```bash
+   samtools view testing/Aligned.out.bam | head -n 5
+   ```
+   Verify you see both `ZG:Z:` and `ZX:Z:` with expected values for the
+   `filtered_gene_names.txt` genes.
+
+Do **not** continue unless all three validation layers succeed without
+shortcuts.
+
+---
+
+## Stage 4 — Documentation, Config Surface, and Regression Safety
+
+- If a configuration flag is needed (e.g., to disable the tags), add it in
+  `Parameters*.{h,cpp}` and document the default behavior.
+- Update user-facing docs to describe `ZG`/`ZX` and the acceptance test gate.
+- Extend `testSTAR.sh` so it writes `testing/run.stats` for regression comparison
+  and calls `testing/assert_zg_zx.py` automatically.
+- Consider adding a CI-friendly wrapper that runs the harness with `--runThreadN
+  4` so it can execute under reduced resources.
+
+**Final test checkpoint:** run `./testSTAR.sh` twice. The second run should be a
+no-op aside from timestamps, proving that reruns reuse the test harness without
+manual cleanup. Keep all guard scripts in version control so reproducibility is
+non-negotiable.
+
+---
+
+## Deliverables
+
+- Code changes emitting `ZG`/`ZX` tags in both SAM and BAM writers.
+- Test harness updates (`testSTAR.sh`, `testing/assert_zg_zx.py`, baseline stats)
+  that fail fast when tags regress or genes fall outside the filtered list.
+- Documentation updates citing the acceptance test (`./testSTAR.sh`) as the
+  canonical validation path.
+- A short QA snippet (commit message or docs) showing the successful harness
+  output along with the guard script summary line.
+
+---
+
+## Pitfalls & Tips
+
+- Keep helper functions pure and thread-safe; STAR's worker threads will reuse
+  them heavily.
+- The harness wipes `testing/` on every run. Any manual artifacts you need for
+  debugging belong elsewhere.
+- When `pysam` is unavailable in production environments, gate the validation
+  script behind an import check and emit a clear installation tip instead of
+  silently skipping it.
+- If you see fixture mismatches during Stage 0, regenerate the FASTQs or
+  `filtered_gene_names.txt` before touching the core code—otherwise you will
+  chase false positives later.

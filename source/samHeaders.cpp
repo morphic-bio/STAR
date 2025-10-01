@@ -102,7 +102,7 @@ void samHeaders(Parameters &P, Genome &genomeOut, Transcriptome &transcriptomeMa
     if (P.outSAMbool) {//
         *P.inOut->outSAM << P.samHeader;
     };
-    if (P.outBAMunsorted){
+    if (P.outBAMunsorted && P.inOut->outBAMfileUnsorted != NULL){
         outBAMwriteHeader(P.inOut->outBAMfileUnsorted,P.samHeader,genomeOut.chrNameAll,genomeOut.chrLengthAll);
     };
 };

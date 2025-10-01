@@ -145,6 +145,8 @@ uint64 ReadAlign::outputSpliceGraphSAM(Transcript const &trOut, uint nTrOut, uin
                 case ATTR_vG:
                 case ATTR_vA:
                 case ATTR_vW:
+                case ATTR_ZG:
+                case ATTR_ZX:
                     break;
                 default:
                     ostringstream errOut;

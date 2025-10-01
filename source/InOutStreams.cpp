@@ -22,6 +22,11 @@ InOutStreams::~InOutStreams() {
     logMain.flush();
     logFinal.flush();
     outLocalChains.flush();
+    
+    // Solo tmp stream
+    if (outBAMfileUnsortedSoloTmp.is_open()) {
+        outBAMfileUnsortedSoloTmp.flush();
+    };
 
     //logStdOutFile.close(); //do not want to close these log files, as some destructors (e.g. ~SharedMemory) might still write there
     //logMain.close();
@@ -32,6 +37,11 @@ InOutStreams::~InOutStreams() {
     logProgress.close();
     logFinal.close();
     outLocalChains.close();
+    
+    // Solo tmp stream
+    if (outBAMfileUnsortedSoloTmp.is_open()) {
+        outBAMfileUnsortedSoloTmp.close();
+    };
 
 
     for (int ii=0;ii<2;ii++) {

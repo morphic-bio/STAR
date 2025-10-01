@@ -1,0 +1,73 @@
+# saveRAM Runbook
+
+## Goal
+Reduce RAM consumption in the CB/UB tag table by compacting per-alignment storage and sharing string data.
+
+## Prerequisites
+- Repository cloned and build prerequisites satisfied.
+- Familiarity with building STAR (e.g., `make STARsolo` in repo root).
+- Ability to run existing integration tests (`integration_test.sh`, `emit_test.sh`).
+
+## Phase 1 – Snapshot Current Behavior
+1. Record git status: `git status -sb`.
+2. Build current binaries if needed: `make STAR`.
+3. Run existing tag table workflow (if practical) to have baseline timing/RAM data.
+
+## Phase 2 – Compact BAMTagEntry payload
+1. Open `source/BAMTagBuffer.h`.
+2. Replace `std::string` members in `BAMTagEntry` with:
+   - `uint32_t qnameId` (index into new pool; 0 == "-").
+   - `uint32_t cbIdx` (whitelist index; `UINT32_MAX` == missing).
+   - `uint32_t umiPacked` (2-bit encoding, `UINT32_MAX` == missing).
+   - `uint8_t statusCode` (0=OK,1=NO_CB,2=NO_UMI,3=NO_CB_UMI).
+   Keep existing scalar metadata (`recordIndex`, `iReadAll`, `mate`, `alignIdx`).
+3. Declare minimal helper structs inside `BAMTagBuffer`:
+   - `struct QnamePool { uint32_t intern(const char*); const std::string& at(uint32_t) const; }` owning a `std::vector<std::string>` and `std::unordered_map<std::string,uint32_t>`.
+   - Optional helper for status string conversion (`static const char* statusToStr(uint8_t)`).
+4. Make sure pool lifetime is tied to `BAMTagBuffer`.
+
+## Phase 3 – Update BAMTagBuffer implementation
+1. Edit `source/BAMTagBuffer.cpp`:
+   - Initialize `qnamePool` in constructor.
+   - In `append()`, obtain pool index from `meta.qname` (`qnameId=0` when null) and store compact fields.
+   - Update `finalizeTag()` to assign `cbIdx` and `umiPacked` instead of strings:
+     * Convert CB string to index using `pSolo.cbWLstr` once per call (pass the index into `finalizeTag()` after computing in caller).
+     * Convert UB string to packed representation with helper `packUmi(const std::string&)`.
+   - Modify `writeTagTable()` to expand compact data when writing:
+     * Fetch QNAME via `qnamePool.at(qnameId)` (write "-" for zero).
+     * Lookup CB string from whitelist vector using `cbIdx` when valid; otherwise "-".
+     * Convert `umiPacked` back to string via `unpackUmi()` respecting configured UMI length.
+     * Convert status code to string via helper.
+   - Ensure `readBuckets` logic still groups entry indices.
+2. Add helper functions (static or unnamed namespace) for UMI pack/unpack using 2-bit encoding. Guard against UMIs exceeding 16 bases: if length >16, set `umiPacked=UINT32_MAX` and log warning once.
+3. Replace existing `computeStatus()` usage with enum-based version.
+4. Clear pooled data in `clear()`.
+
+## Phase 4 – Propagate index inputs
+1. Inspect `SoloFeature::finalizeTagTableFromReadInfo()` (`source/SoloFeature_collapseUMIall.cpp`).
+2. Change signature of `bamTagBuffer->finalizeTag()` to accept CB index (`uint32_t`) and `uint32_t` packed UMI instead of strings.
+3. Update callers to pass:
+   - CB index already in `readInfo[iRead].cb` (leave as `UINT32_MAX` when `(uint64)-1`).
+   - Packed UMI via new helper `packUmi(readInfo[iRead].umi)` using known `pSolo.umiL`.
+4. Adjust any other invocations of `finalizeTag()` (search repository for `finalizeTag(`) to provide new types.
+
+## Phase 5 – Adjust BAMRecordMeta usage
+1. Review `source/BAMoutput.cpp` and `source/BAMoutput.h` to ensure `append()` is still invoked with accessible `meta.qname`.
+2. If `meta.qname` can be null, pool logic already handles sentinel 0.
+3. Consider deduplicating `meta.qname` allocations if they are short-lived.
+
+## Phase 6 – Tests and Validation
+1. Rebuild: `make STAR` (or relevant target).
+2. Run `integration_test.sh` and `emit_test.sh`; ensure no regressions.
+3. If tag table is produced in tests, inspect output file to confirm human-readable strings match previous behavior.
+4. Optionally measure memory consumption with `/usr/bin/time -v ./STAR ...` to validate reduction.
+
+## Phase 7 – Cleanup
+1. Run `git status -sb`; stage changes if desired.
+2. Document results (RAM before/after, caveats).
+3. Leave `saveRAM_plan.txt` in repository until work is complete.
+
+## Notes
+- Keep conversions centralized so additional tag fields can reuse pool logic later.
+- Watch for threads concurrently calling `append()`; guard pool access with same mutex used for `entries`.
+- Validate the 2-bit UMI encoding against real data; fall back gracefully when encountering non-ACGT characters.
