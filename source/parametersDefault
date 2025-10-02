@@ -924,6 +924,11 @@ soloWriteTagTable           None
                             Default     ... write to <outFileNamePrefix>Aligned.out.cb_ub.bin
                             <path>      ... write to specified file path
 
+soloSkipProcessing          no
+    string:                 skip Solo post-mapping counting, matrix construction, and cell filtering
+                            yes         ... skip Solo counting while still allowing ZG/ZX tags, CB/UB injection, or tag table export
+                            no          ... perform full Solo processing (default)
+
 #####UnderDevelopment_begin : not supported - do not use
 soloClusterCBfile           -
     string:                 file containing the cluster information for cell barcodes, two columns: CB cluster_index. Only used with --soloFeatures Transcript3p

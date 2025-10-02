@@ -65,6 +65,24 @@ void ParametersSolo::initialize(Parameters *pPin)
     };
     
     //////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////--soloSkipProcessing
+    if (skipProcessingStr == "yes") {
+        skipProcessing = true;
+    } else if (skipProcessingStr == "no") {
+        skipProcessing = false;
+    } else {
+        ostringstream errOut;
+        errOut << "EXITING because of fatal PARAMETERS error: unrecognized option in --soloSkipProcessing="<<skipProcessingStr<<"\n";
+        errOut << "SOLUTION: use allowed option: yes OR no\n";
+        exitWithError(errOut.str(),std::cerr, pP->inOut->logMain, EXIT_CODE_PARAMETER, *pP);
+    };
+    
+    // Keep skipProcessing disabled when running in soloCellFiltering mode to avoid side effects
+    if (pP->runMode == "soloCellFiltering") {
+        skipProcessing = false;
+    };
+    
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
     ///////////////////////////////--soloType
     barcodeStart=barcodeEnd=0; //this means that the entire barcodeRead is considered barcode. Will change it for simple barcodes.    
     yes = true;
@@ -491,6 +509,26 @@ void ParametersSolo::initialize(Parameters *pPin)
             errOut << "EXITING because of fatal PARAMETERS error: --soloWriteTagTable requires --soloFeatures Gene OR/AND GeneFull OR/AND GeneFull_Ex50pAS OR/AND GeneFull_ExonOverIntron.\n";
             errOut << "SOLUTION: re-run STAR adding Gene AND/OR GeneFull OR/AND GeneFull_Ex50pAS OR/AND GeneFull_ExonOverIntron to --soloFeatures\n";
             exitWithError(errOut.str(),std::cerr, pP->inOut->logMain, EXIT_CODE_PARAMETER, *pP);
+        };
+    };
+    
+    ////////////////////////////////////////////////////////////////skipProcessing validation warnings
+    if (skipProcessing) {
+        // Warn if no per-read products are enabled
+        if (!writeTagTableEnabled && !addTagsToUnsorted && !pP->outSAMattrPresent.ZG && !pP->outSAMattrPresent.ZX) {
+            pP->inOut->logMain << "WARNING: --soloSkipProcessing=yes but neither CB/UB tag injection (--soloAddTagsToUnsorted) nor tag table export (--soloWriteTagTable) nor ZG/ZX tags are enabled.\n";
+            pP->inOut->logMain << "         Skipping Solo processing will not produce count matrices or per-read tag artifacts.\n";
+        };
+        
+        // Warn that cell filtering parameters are ignored
+        if (!cellFilter.type.empty() && cellFilter.type[0] != "None") {
+            pP->inOut->logMain << "NOTE: --soloSkipProcessing=yes disables cell filtering; --soloCellFilter parameters will be ignored.\n";
+        };
+        
+        // Warn if ZG/ZX attributes are requested without GeneFull
+        if ((pP->outSAMattrPresent.ZG || pP->outSAMattrPresent.ZX) && !featureYes[SoloFeatureTypes::GeneFull]) {
+            pP->inOut->logMain << "WARNING: ZG/ZX attributes are requested but GeneFull is not in --soloFeatures.\n";
+            pP->inOut->logMain << "         ZG/ZX tags may be empty or incomplete. Add GeneFull to --soloFeatures for proper annotation.\n";
         };
     };
     

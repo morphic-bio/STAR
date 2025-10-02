@@ -300,6 +300,7 @@ Parameters::Parameters() {//initalize parameters info
     parArray.push_back(new ParameterInfoScalar <string>   (-1, -1, "soloCBtype",&pSolo.CBtype.typeString));
     parArray.push_back(new ParameterInfoScalar <string>   (-1, -1, "soloAddTagsToUnsorted",&pSolo.addTagsToUnsortedStr));
     parArray.push_back(new ParameterInfoScalar <string>   (-1, -1, "soloWriteTagTable",&pSolo.writeTagTableStr));
+    parArray.push_back(new ParameterInfoScalar <string>   (-1, -1, "soloSkipProcessing",&pSolo.skipProcessingStr));
 
     parameterInputName.push_back("Default");
     parameterInputName.push_back("Command-Line-Initial");

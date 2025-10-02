@@ -136,6 +136,7 @@ void BAMunsortedAddSoloTags(const std::string &tmpPath,
             errOut << "Record: " << recordsProcessed << ", readInfo.size: " << solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo.size() << "\n";
             errOut << "Full trailer: 0x" << std::hex << trailer << std::dec << " (iread=" << iread << ", aux=0x" << std::hex << aux << std::dec << ")\n";
             errOut << "SOLUTION: check for corrupted tmp file or upstream indexing issues: " << tmpPath << "\n";
+            errOut << "NOTE: If you ran with --soloSkipProcessing yes, ensure readInfo was populated by the minimal pipeline.\n";
             exitWithError(errOut.str(), std::cerr, P.inOut->logMain, EXIT_CODE_PARAMETER, P);
         }
         

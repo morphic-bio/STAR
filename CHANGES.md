@@ -96,6 +96,24 @@ For detailed implementation information, see `new/docs/ZG_ZX_Implementation_Summ
 
 =======
 >>>>>>> da05a276c7ca890005f7d6cfe643a08adb8418ba
+### 3. Solo Skip Processing (`--soloSkipProcessing {yes|no}`)
+- Adds `--soloSkipProcessing` (default `no`) to bypass Solo counting, UMI deduplication, matrix generation, and cell filtering while preserving per-read artifacts. The mapping pipeline runs to completion, ZG/ZX and CB/UB tags are finalized, and the optional binary tag table is written if enabled.
+- Baseline vs Skip expectations:
+  - Identical `Aligned.out.bam` and `Aligned.out.cb_ub.bin`
+  - `Solo.out/` directory exists in both runs; `Solo.out/GeneFull` contains files in baseline and is empty in skip mode
+  - ZG tag fields are populated (non-empty and not `-`) in BAM
+- Parameter surfaces:
+  - `source/ParametersSolo.h/.cpp`: `skipProcessingStr` and parsed `skipProcessing` boolean with validation and logging
+  - `source/parametersDefault`: added `soloSkipProcessing           no`
+  - `source/Parameters.cpp`: CLI registration and summary echo
+- Control-flow hook:
+  - `Solo::processAndOutput()` branches early when `skipProcessing` is true to execute a minimal post-processing path that prepares `readInfo` for tag injection and optional tag-table emission, then returns without matrix allocations
+- Safety/validation:
+  - Warns when skip mode is enabled without any per-read outputs requested (e.g., neither `--soloAddTagsToUnsorted` nor `--soloWriteTagTable`)
+  - Incompatible feature sets (that fundamentally require matrices) are rejected with actionable errors
+- Tests:
+  - `new/tests/skip_processing_test.sh` runs baseline and skip side-by-side, confirms Solo folder expectations, diffs BAM and BIN parity, checks equal BAM line counts, and validates non-empty ZG fields in both outputs
+
 ## Infrastructure Updates
 - `Parameters.cpp` defers unsorted BAM opening until Solo initialization has resolved whether the two-pass workflow is required, storing the decision in `outBAMunsortedUseSoloTmp`.
 - `ParametersSolo` parses and validates both new flags, manages the shared `BAMTagBuffer`, and extends error handling for CB/UB attribute combinations and feature requirements.

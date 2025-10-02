@@ -41,6 +41,27 @@ void SoloFeature::processRecords()
 
     SoloFeature::sumThreads();
     
+    // Early exit for skipProcessing mode: populate readInfo but skip counting/matrices
+    if (pSolo.skipProcessing) {
+        // Call minimal processing to populate readInfo using collapseUMI in minimal mode
+        prepareReadInfoOnly();
+        
+        // Write tag table if requested (readInfo is now available)
+        writeTagTableIfRequested(false);
+
+        // Sanity check: ensure readInfo is populated for all reads
+        if (readInfo.size() != nReadsInput) {
+            P.inOut->logMain << "WARNING: readInfo size (" << readInfo.size() 
+                             << ") does not equal nReadsInput (" << nReadsInput 
+                             << ") in skipProcessing mode" << endl;
+        }
+        
+        time(&rawTime);
+        P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Solo: skipping counting and matrix output for " 
+                         << SoloFeatureTypes::Names[featureType] << " (soloSkipProcessing=yes)" <<endl;
+        return;
+    }
+    
     //call counting method
     if (featureType==SoloFeatureTypes::Velocyto) {
         countVelocyto();

@@ -1,6 +1,7 @@
 #include "Solo.h"
 #include "TimeFunctions.h"
 #include "streamFuns.h"
+#include "BAMTagBuffer.h"
 
 Solo::Solo(ReadAlignChunk **RAchunkIn, Parameters &Pin, Transcriptome &inTrans)
                        :  RAchunk(RAchunkIn), P(Pin), Trans(inTrans), pSolo(P.pSolo)
@@ -13,6 +14,8 @@ Solo::Solo(ReadAlignChunk **RAchunkIn, Parameters &Pin, Transcriptome &inTrans)
     if ( pSolo.type == pSolo.SoloTypes::CB_samTagOut )
         return;
 
+    // Note: soloFeat allocation happens regardless of skipProcessing
+    // The skip flag only affects post-mapping processing in processAndOutput()
     soloFeat = new SoloFeature*[pSolo.nFeatures];
     for (uint32 ii=0; ii<pSolo.nFeatures; ii++)
         soloFeat[ii] = new SoloFeature(P, RAchunk, Trans, pSolo.features[ii], readBarSum, soloFeat);
@@ -73,6 +76,27 @@ void Solo::processAndOutput()
     
     if (pSolo.type==pSolo.SoloTypes::CB_samTagOut)
         return;
+
+    // Early exit for skipProcessing mode with minimal readInfo preparation
+    if (pSolo.skipProcessing) {
+        // If tag table or CB/UB injection is enabled, we need minimal readInfo population
+        if (pSolo.writeTagTableEnabled || pSolo.addTagsToUnsorted) {
+            // Process only the samAttrFeature to populate readInfo without full counting
+            uint32 attrFeatureIdx = pSolo.featureInd[pSolo.samAttrFeature];
+            if (attrFeatureIdx < pSolo.nFeatures) {
+                *P.inOut->logStdOut << timeMonthDayTime() << " ..... preparing readInfo for tag export (skipProcessing mode)\n" <<flush;
+                P.inOut->logMain    << timeMonthDayTime() << " ..... preparing readInfo for tag export (skipProcessing mode)\n" <<flush;
+                
+                // Call processRecords which will populate readInfo
+                // The feature processing code should handle skipProcessing internally
+                soloFeat[attrFeatureIdx]->processRecords();
+            }
+        }
+        
+        *P.inOut->logStdOut << timeMonthDayTime() << " ..... skipping Solo counting (soloSkipProcessing=yes)\n" <<flush;
+        P.inOut->logMain    << timeMonthDayTime() << " ..... skipping Solo counting (soloSkipProcessing=yes)\n" <<flush;
+        return;
+    }
 
     {//process all features
         *P.inOut->logStdOut << timeMonthDayTime() << " ..... started Solo counting\n" <<flush;

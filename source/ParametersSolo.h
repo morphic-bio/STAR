@@ -212,6 +212,10 @@ public:
     string writeTagTablePath;//resolved absolute path
     BAMTagBuffer* bamTagBuffer = nullptr;//shared buffer for collecting BAM record metadata
 
+    //skip processing
+    string skipProcessingStr = "no";//raw CLI value
+    bool skipProcessing = false;//whether to skip Solo counting, matrix construction, and cell filtering
+
     //processing
     uint32 redistrReadsNfiles; //numer of files to resditribute reads into
     

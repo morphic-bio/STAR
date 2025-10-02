@@ -87,11 +87,12 @@ public:
     void countCBgeneUMI();
     void countVelocyto();
     void quantTranscript();
+    void prepareReadInfoOnly(); //minimal processing to populate readInfo without counting (for skipProcessing mode)
     
     void collapseUMI(uint32 iCB, uint32 *umiArray);
     void collapseUMI_CR(uint32 iCB, uint32 *umiArray);
-    void collapseUMIall();
-    void collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<uint32> &gID,  vector<uint32> &gReadS);
+    void collapseUMIall(bool minimalMode=false);
+    void collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<uint32> &gID,  vector<uint32> &gReadS, bool minimalMode);
 
     uint32 umiArrayCorrect_CR         (const uint32 nU0, uintUMI *umiArr, const bool readInfoRec, const bool nUMIyes, unordered_map <uintUMI,uintUMI> &umiCorr);
     uint32 umiArrayCorrect_Directional(const uint32 nU0, uintUMI *umiArr, const bool readInfoRec, const bool nUMIyes, unordered_map <uintUMI,uintUMI> &umiCorr, const int32 dirCountAdd);

@@ -1,0 +1,92 @@
+Implementation Plan: --soloSkipProcessing
+
+Context & references
+- new/plans/soloSkipProcessing_design.md for behavioral intent, validation, and logging copy.
+- source/Solo.cpp, source/SoloFeature_*.cpp, source/SoloReadFeature_*.cpp for the mapping → post-processing lifecycle.
+- source/BAMTagBuffer.* and source/BAMunsortedAddSoloTags.cpp for CB/UB tag emission.
+
+Objectives
+- Introduce `--soloSkipProcessing {yes|no}` (default `no`) that lets the normal mapping pipeline run to completion, then bypasses Solo counting, matrix generation, UMI deduplication, and cell filtering allocations.
+- Ensure per-read products (ZG/ZX tags, optional CB/UB injection, optional binary tag table) still finalize correctly after the post-mapping skip branch.
+- Leave existing behavior untouched when the flag is not used.
+
+Work items
+1. Parameter plumbing
+   - source/ParametersSolo.h: add `std::string skipProcessingStr{"no"}; bool skipProcessing{false};` near other Solo toggles.
+   - source/parametersDefault: append `soloSkipProcessing           no` with a short description.
+   - source/Parameters.cpp: register the CLI option via `ParameterInfoScalar<string>(..., "soloSkipProcessing", &pSolo.skipProcessingStr)` alongside other Solo parameters.
+   - source/ParametersSolo.cpp:
+     * Parse the string into `skipProcessing`, emitting a fatal error for invalid inputs.
+     * Keep `skipProcessing` false when `runMode == "soloCellFiltering"` to avoid side effects.
+     * Wire the new flag into any structures that are echoed in configuration summaries/logging.
+
+2. Validation, warnings, and summary output
+   - source/ParametersSolo.cpp:
+     * Warn when `skipProcessing` is enabled but neither `--soloAddTagsToUnsorted` nor `--soloWriteTagTable` is active (users would skip matrices and per-read artifacts).
+     * Warn that Solo cell-filter parameters are ignored in skip mode.
+     * Block configurations that fundamentally require matrices (e.g., `--soloFeatures Transcript3p` or Velocyto) while skip mode is enabled, or document an alternative behavior (recommended: fatal error with guidance).
+     * Warn if ZG/ZX attributes are requested without `GeneFull`, reminding users that skipping processing will not backfill that feature.
+   - Add `soloSkipProcessing             yes|no` to the Solo configuration summary (Log.out and console output).
+   - Update documentation (e.g., new/docs/CHANGES_FORK.md, new/docs/TECHNICAL_NOTES.md) once behavior is finalized.
+
+3. Solo constructor and setup (mapping phase stays unchanged)
+   - No change to mapping-time behavior: `SoloReadFeature::record` and related code still write the usual temporary files and metadata.
+   - Ensure `Solo::Solo(ReadAlignChunk**, ...)` continues to allocate SoloFeature objects exactly as today so mapping proceeds normally. Document in comments that the skip flag only alters post-mapping allocations.
+   - If desired, guard any eager allocations of SoloFeature internals that happen immediately after construction (but before post-processing) so they are deferred until needed.
+
+4. Post-mapping skip branch (Solo::processAndOutput)
+   - After the existing barcode statistics block, add:
+     ```cpp
+     if (pSolo.skipProcessing) {
+         finalizeMinimalSoloOutputs();
+         return;
+     }
+     ```
+   - Implement `finalizeMinimalSoloOutputs()` (either inline or as a helper) to:
+     1. Ensure the Solo feature referenced by `pSolo.samAttrFeature` exists.
+     2. Run a minimal data-prep routine that populates `soloFeat[feature]->readInfo` without allocating/counting matrices (see step 5).
+     3. If `pSolo.writeTagTableEnabled`, flush the tag table via `soloFeat[...]` and `bamTagBuffer`.
+     4. Log `" ..... skipping Solo counting (soloSkipProcessing=yes)"` to both stdout and Log.out.
+   - All downstream counting loops and feature processing remain untouched when skip is disabled.
+
+5. Minimal post-processing without matrix allocations
+   - Extend `SoloFeature::processRecords()` and helpers so they can execute a “read-info only” path:
+     * Introduce a new method (e.g., `SoloFeature::prepareReadInfoOnly()`) that performs the early portions of `countCBgeneUMI()` needed to fill `readInfo`, while skipping allocations dependent on matrices.
+     * Within `countCBgeneUMI()` guard allocations/resize operations (`countCellGeneUMI`, `countMatMult`, etc.) behind `if (!pSolo.skipProcessing)` blocks.
+     * Still allocate `readInfo` (since it is required for CB/UB tag injection) and run the pieces of `SoloReadFeature::inputRecords()` that populate it.
+     * Skip cell-filtering, matrix writes, stats output, and calls to `clearLarge()` for heavy structures when skip mode is active.
+   - Update `SoloFeature::processRecords()` to detect skip mode and invoke the new lightweight helper instead of the full counting path.
+   - After readInfo is ready, call `writeTagTableIfRequested(false)` if tag tables are enabled; otherwise, ensure `readInfo` is ready for unsorted tag injection.
+
+6. BAM tag buffer and unsorted BAM injection
+   - `BAMTagBuffer` logic should remain unchanged. Confirm that the skip branch still triggers `writeTagBinary()` when `writeTagTableEnabled` is true.
+   - In `BAMunsortedAddSoloTags.cpp`, add a defensive check that `solo.soloFeat[...]` and its `readInfo` vector are populated even when skipping. Emit a fatal error with actionable guidance if not.
+
+7. Pipeline/documentation surfaces
+   - Confirm `scripts/runAll.sh` already forwards arbitrary STAR arguments (via `STAR_EXTRA_ARGS` or equivalent). If not, add the plumbing so `--soloSkipProcessing` is respected.
+   - Reflect the new option in documentation (`new/docs/STARsolo.md`, relevant README sections) once implementation is complete.
+
+Testing steps (mirror run_production.sh parameters without calling the wrapper)
+1. Build the forked STAR binary (`make STAR_fork`, `ninja`, or project-standard command).
+2. Baseline run (skip disabled) using the same parameter values that `../flex/run_production.sh` would supply, but invoke STAR directly on downsampled data:
+   ```bash
+   STAR_fork \
+     --runThreadN 24 \
+     --genomeDir /storage/flex_filtered_reference/star_index \
+     --readFilesIn /storage/downsampled/SC2300771/R1.fastq.gz /storage/downsampled/SC2300771/R2.fastq.gz \
+     --readFilesCommand zcat \
+     --soloType CB_UMI_Simple \
+     --soloFeatures GeneFull \
+     --soloCBwhitelist /storage/scRNAseq_output/whitelists/737K-fixed-rna-profiling.txt \
+     --outSAMtype BAM Unsorted SortedByCoordinate \
+     --soloAddTagsToUnsorted yes \
+     --soloWriteTagTable Default \
+     --outFileNamePrefix /storage/downsampled/results/solo_baseline/ \
+     [include any additional parameters copied from run_production defaults]
+   ```
+   - Confirm matrices exist under `Solo.out/*/raw` and per-read artifacts are present.
+3. Skip-mode run with identical parameters plus `--soloSkipProcessing yes`, writing to a separate prefix (e.g., `/storage/downsampled/results/solo_skip/`).
+   - Expect no `Solo.out/*/raw` matrices, skip warning logged, and CB/UB products (tags or binary table) present.
+4. Optionally wrap both runs with `/usr/bin/time -v` to capture peak RSS differences.
+5. If pipeline wrappers were modified, execute a dry-run (`scripts/runAll.sh --dry-run` with `STAR_EXTRA_ARGS='--soloSkipProcessing yes'`) to verify the flag propagates.
+

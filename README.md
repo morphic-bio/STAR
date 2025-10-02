@@ -59,6 +59,31 @@ STAR --outSAMattributes NH HI AS nM NM CR CY UR UY GX GN gx gn ZG ZX \
 - Perfect 100% concordance with existing GX tags
 - Production validated on large-scale datasets
 
+### 4. Solo Skip Processing (`--soloSkipProcessing`)
+Allows running the full mapping pipeline while skipping Solo counting/matrix generation. Per-read artifacts (e.g., CB/UB tag injection into unsorted BAM and optional binary tag table) still finalize, while `Solo.out/GeneFull` remains an empty directory skeleton.
+
+Quick Usage:
+```bash
+STAR --runThreadN 24 \
+     --genomeDir /path/to/genome \
+     --readFilesIn R2.fastq.gz R1.fastq.gz \
+     --readFilesCommand zcat \
+     --outSAMtype BAM Unsorted \
+     --outSAMattributes NH HI AS nM NM CR CY UR UY CB UB ZG ZX \
+     --soloType CB_UMI_Simple \
+     --soloCBwhitelist /path/to/whitelist.txt \
+     --soloFeatures Gene GeneFull \
+     --soloAddTagsToUnsorted yes \
+     --soloWriteTagTable Default \
+     --soloSkipProcessing yes \
+     --outFileNamePrefix output/
+```
+
+Notes:
+- Default is `--soloSkipProcessing no`
+- Expect identical `Aligned.out.bam` and `Aligned.out.cb_ub.bin` vs a full Solo run, with `Solo.out/GeneFull` empty in skip mode
+
+
 DOCUMENTATION
 ==============
 

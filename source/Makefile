@@ -67,7 +67,7 @@ OBJECTS = systemFunctions.o funPrimaryAlignMark.o \
 	ParametersSolo.o SoloRead.o SoloRead_record.o \
 	SoloReadBarcode.o SoloReadBarcode_getCBandUMI.o SoloBarcode_extractBarcode.o \
 	SoloReadFeature.o SoloReadFeature_record.o SoloReadFeature_inputRecords.o \
-	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_addBAMtags.o SoloFeature_writeTagTable.o \
+	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_prepareReadInfoOnly.o SoloFeature_addBAMtags.o SoloFeature_writeTagTable.o \
 	BAMTagBuffer.o BAMTagBinaryWriter.o \
 	ReadAlign_transformGenome.o Genome_transformGenome.o Transcript_convertGenomeCigar.o \
 	twoPassRunPass1.o samHeaders.o Genome_genomeLoad.o Genome_genomeOutLoad.o Transcript_transformGenome.o ReadAlign_outputSpliceGraphSAM.o \

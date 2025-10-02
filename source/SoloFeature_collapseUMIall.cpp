@@ -10,7 +10,7 @@
 inline int funCompareSolo1 (const void *a, const void *b);          //defined below
 inline int funCompare_uint32_1_2_0 (const void *a, const void *b);
 
-void SoloFeature::collapseUMIall() 
+void SoloFeature::collapseUMIall(bool minimalMode)
 {
     vector<uint32> umiArray(nReadPerCBmax*umiArrayStride);//temp array for collapsing UMI
     vector<uint32> gID(min(2*featuresNumber,nReadPerCBmax)+1); //gene IDs, 2* is needed because each gene can have unique and multi-mappers
@@ -18,23 +18,25 @@ void SoloFeature::collapseUMIall()
 
     for (uint32 icb=0; icb<nCB; icb++) {//main collapse cycle
         
-        collapseUMIperCB(icb, umiArray, gID, gReadS);
+        collapseUMIperCB(icb, umiArray, gID, gReadS, minimalMode);
         
-        readFeatSum->stats.V[readFeatSum->stats.yesUMIs] += nUMIperCB[icb];
-        if (nGenePerCB[icb]>0) //nGenePerCB contains only unique
-            ++readFeatSum->stats.V[readFeatSum->stats.yesCellBarcodes];
-        
-        readFeatSum->stats.V[readFeatSum->stats.yesWLmatch] += nReadPerCBtotal[icb];        
-        readFeatSum->stats.V[readFeatSum->stats.yessubWLmatch_UniqueFeature ] += nReadPerCBunique[icb];        
+        if (!minimalMode) {
+            readFeatSum->stats.V[readFeatSum->stats.yesUMIs] += nUMIperCB[icb];
+            if (nGenePerCB[icb]>0) //nGenePerCB contains only unique
+                ++readFeatSum->stats.V[readFeatSum->stats.yesCellBarcodes];
+            
+            readFeatSum->stats.V[readFeatSum->stats.yesWLmatch] += nReadPerCBtotal[icb];        
+            readFeatSum->stats.V[readFeatSum->stats.yessubWLmatch_UniqueFeature ] += nReadPerCBunique[icb];        
+        }
     };
     
     // After all CB/UB values are finalized, update the BAMTagBuffer if tag table export is enabled
-    if (pSolo.writeTagTableEnabled && pSolo.bamTagBuffer && readInfo.size() > 0) {
+    if (!minimalMode && pSolo.writeTagTableEnabled && pSolo.bamTagBuffer && readInfo.size() > 0) {
         finalizeTagTableFromReadInfo();
     }
 };
 
-void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<uint32> &gID,  vector<uint32> &gReadS)
+void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<uint32> &gID,  vector<uint32> &gReadS, bool minimalMode)
 {
 
     uint32 *rGU=rCBp[iCB];
@@ -98,12 +100,14 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
     
     vector<unordered_map <uintUMI,uintUMI>> umiCorrected(nGenes);
 
-    if (countCellGeneUMI.size() < countCellGeneUMIindex[iCB] + nGenes*countMatStride)
-        countCellGeneUMI.resize((countCellGeneUMI.size() + nGenes*countMatStride )*2);//allocated vector too small
-    
-    nGenePerCB[iCB]=0;
-    nUMIperCB[iCB]=0;
-    countCellGeneUMIindex[iCB+1]=countCellGeneUMIindex[iCB];
+    if (!minimalMode) {
+        if (countCellGeneUMI.size() < countCellGeneUMIindex[iCB] + nGenes*countMatStride)
+            countCellGeneUMI.resize((countCellGeneUMI.size() + nGenes*countMatStride )*2);//allocated vector too small
+        
+        nGenePerCB[iCB]=0;
+        nUMIperCB[iCB]=0;
+        countCellGeneUMIindex[iCB+1]=countCellGeneUMIindex[iCB];
+    }
     
     /////////////////////////////////////////////
     /////////// main cycle over genes with unique-gene-mappers
@@ -156,43 +160,39 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
         };        
             
             
-        if (pSolo.umiDedup.yes.NoDedup)
-            countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.NoDedup] = nR0;
+        if (!minimalMode) {
+            if (pSolo.umiDedup.yes.NoDedup)
+                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.NoDedup] = nR0;
+        }
 
-        if (nU0>0) {//otherwise no need to count
-            if (pSolo.umiDedup.yes.Exact)
-                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.Exact] = nU0;
-                
+        if (nU0>0) {
+            // Run dedup corrections but write matrices only if not minimal
             if (pSolo.umiDedup.yes.CR)
-                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.CR] = 
-                    umiArrayCorrect_CR(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::CR, true, umiCorrected[iG]);
-                
+                umiArrayCorrect_CR(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::CR, !minimalMode, umiCorrected[iG]);
             if (pSolo.umiDedup.yes.Directional)
-                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.Directional] = 
-                    umiArrayCorrect_Directional(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional, true, umiCorrected[iG], 0);
-                    
+                umiArrayCorrect_Directional(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional, !minimalMode, umiCorrected[iG], 0);
             if (pSolo.umiDedup.yes.Directional_UMItools)
-                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.Directional_UMItools] = 
-                    umiArrayCorrect_Directional(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional_UMItools, true, umiCorrected[iG], -1);                    
-                
-            //this changes umiArray, so it should be last call
+                umiArrayCorrect_Directional(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional_UMItools, !minimalMode, umiCorrected[iG], -1);
             if (pSolo.umiDedup.yes.All)
-                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.All] = 
-                    umiArrayCorrect_Graph(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::All, true, umiCorrected[iG]);
-        };//if (nU0>0)
+                umiArrayCorrect_Graph(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::All, !minimalMode, umiCorrected[iG]);
+            if (!minimalMode) {
+                if (pSolo.umiDedup.yes.Exact)
+                    countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.Exact] = nU0;
+            }
+        }
         
-        {//check any count>0 and finalize record for this gene
+        if (!minimalMode) {
             uint32 totcount=0;
             for (uint32 ii=countCellGeneUMIindex[iCB+1]+1; ii<countCellGeneUMIindex[iCB+1]+countMatStride; ii++) {
                 totcount += countCellGeneUMI[ii];
             };
-            if (totcount>0) {//at least one umiDedup type is non-0
+            if (totcount>0) {
                 countCellGeneUMI[countCellGeneUMIindex[iCB+1] + 0] = gID[iG];
                 nGenePerCB[iCB]++;
                 nUMIperCB[iCB] += countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.main];
-                countCellGeneUMIindex[iCB+1] = countCellGeneUMIindex[iCB+1] + countMatStride;//iCB+1 accumulates the index
+                countCellGeneUMIindex[iCB+1] = countCellGeneUMIindex[iCB+1] + countMatStride;
             };
-        };        
+        }
         
         if (readInfo.size()>0) {//record cb/umi for each read
             for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
@@ -244,15 +244,17 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
             };
         };
 
-        for (uint32 ig=0; ig<nGenes; ig++) {
-            if (geneCounts[ig] == 0)
-                continue; //no counts for this gene
-            nGenePerCB[iCB]++;
-            nUMIperCB[iCB] += geneCounts[ig];
-            countCellGeneUMI[countCellGeneUMIindex[iCB+1] + 0] = gID[ig];
-            countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.CR] = geneCounts[ig];
-            countCellGeneUMIindex[iCB+1] = countCellGeneUMIindex[iCB+1] + countMatStride;//iCB+1 accumulates the index
-        };
+        if (!minimalMode) {
+            for (uint32 ig=0; ig<nGenes; ig++) {
+                if (geneCounts[ig] == 0)
+                    continue; //no counts for this gene
+                nGenePerCB[iCB]++;
+                nUMIperCB[iCB] += geneCounts[ig];
+                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + 0] = gID[ig];
+                countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.CR] = geneCounts[ig];
+                countCellGeneUMIindex[iCB+1] = countCellGeneUMIindex[iCB+1] + countMatStride;//iCB+1 accumulates the index
+            };
+        }
         
         if (readInfo.size()>0) {//record cb/umi for each read
             for (uint32 iG=0; iG<nGenes; iG++) {//cycle over genes
@@ -278,7 +280,7 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
     
     //////////////////////////////////////////multi-gene reads to the end of function
     //////////////////////////////////////////
-    if (pSolo.multiMap.yes.multi)
+    if (!minimalMode && pSolo.multiMap.yes.multi)
         countMatMult.i[iCB+1] = countMatMult.i[iCB];
     
     if (nGenesMult>0) {//process multigene reads

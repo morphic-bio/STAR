@@ -9,6 +9,7 @@ This document captures the code changes introduced in the fork relative to upstr
 - `source/ParametersSolo.h/.cpp`:
   - Parses `--soloAddTagsToUnsorted` (`addTagsToUnsorted`/`addTagsToUnsortedStr`).
   - Parses `--soloWriteTagTable` (`writeTagTableEnabled`, `writeTagTablePath`); instantiates a shared `BAMTagBuffer` when enabled.
+  - Parses `--soloSkipProcessing` (`skipProcessingStr`, `skipProcessing`) with validation and summary echo.
   - Extends validation so CB/UB SAM attributes are allowed when either sorted BAM, two-pass unsorted output, or tag-table export is selected. Misconfigurations emit fatal errors with remediation guidance.
   - Enforces feature requirements (`Gene`, `GeneFull`, `GeneFull_Ex50pAS`, `GeneFull_ExonOverIntron`) when a tag table is requested to guarantee `readInfo` coverage.
   - Destructor cleans up `bamTagBuffer` to avoid leaks in long-lived processes.
@@ -28,6 +29,50 @@ This document captures the code changes introduced in the fork relative to upstr
   4. Monitor size growth against `BAM_ATTR_MaxSize`; log and exit on overflow.
 - Debug instrumentation (`STAR_DEBUG_TAG`) decorates buffer allocation, size changes, and readInfo mismatches with timestamps.
 - On success the temp file is removed; inability to delete is treated as a warning.
+
+## Skip Mode – Minimal Post-Processing Path (`--soloSkipProcessing yes`)
+### Goal
+Run the standard mapping pipeline, then bypass Solo counting/matrix generation while still finalizing per-read artifacts (CB/UB tag injection into the unsorted BAM and optional binary tag table).
+
+### Control Flow
+- Entry point: `Solo::processAndOutput()`
+  - Early in this function, after barcode statistics, check `pSolo.skipProcessing`.
+  - If true, invoke `finalizeMinimalSoloOutputs()` and return.
+
+### `finalizeMinimalSoloOutputs()` Responsibilities
+1. Ensure that the feature referenced by `pSolo.samAttrFeature` (typically `GeneFull`) has been constructed.
+2. Prepare `soloFeat[feature]->readInfo` so that `BAMunsortedAddSoloTags` can safely call `SoloFeature::addBAMtags` for every record.
+3. If `pSolo.writeTagTableEnabled`, call `writeTagTableIfRequested(false)` to flush the tag table without allocating matrices.
+4. Emit a concise log line to stdout and `Log.out`: "..... skipping Solo counting (soloSkipProcessing=yes)".
+
+### Algorithmic Adjustments
+- `SoloFeature::processRecords()` splits into two paths:
+  - Full path (default): performs counting, deduplication, cell filtering, matrix writes, stats.
+  - Read-info-only path (skip mode): invokes a lightweight helper (e.g., `prepareReadInfoOnly()`) that does the minimal work needed to fill `readInfo` without allocating matrix structures such as `countCellGeneUMI` and `countMatMult`.
+- Allocation guards: expensive vectors and matrices are guarded with `if (!pSolo.skipProcessing)` to avoid unnecessary memory use.
+- Unsorted BAM tag injection remains unchanged; the presence of `readInfo` is the only requirement.
+
+### Outputs and Invariants
+- `Solo.out/` exists in both modes for compatibility with downstream tools.
+- `Solo.out/GeneFull`:
+  - Baseline: contains matrices and stats.
+  - Skip mode: directory exists but is empty.
+- `Aligned.out.bam` and `Aligned.out.cb_ub.bin` are bitwise identical between baseline and skip runs given the same inputs and parameters.
+
+### Validation
+- `new/tests/skip_processing_test.sh` executes baseline and skip mode with identical parameters except `--soloSkipProcessing yes` and separate prefixes. It asserts:
+  - Presence of `Solo.out` in both outputs, `GeneFull` non-empty for baseline and empty for skip.
+  - `diff` parity of `Aligned.out.bam` and `Aligned.out.cb_ub.bin` across runs.
+  - Equal BAM line counts (`samtools view | wc -l`).
+  - ZG tag presence and non-emptiness in both BAMs.
+
+### Gotchas & Edge Cases
+- If neither `--soloAddTagsToUnsorted` nor `--soloWriteTagTable` is enabled, skip mode will produce no per-read artifacts; emit a warning.
+- Feature requirements: ZG/ZX population depends on `GeneFull` being present in `--soloFeatures`. Enforce or warn accordingly.
+- Incompatible configurations: modes that fundamentally rely on matrices (e.g., certain specialized Solo features) should be rejected while in skip mode with actionable error messages.
+- Memory accounting: ensure that matrix-related `clearLarge()` calls are not invoked in skip mode (they should be unreachable) to avoid double-free patterns.
+- Determinism: preserving bitwise identity requires stable ordering; audit any logging or non-deterministic iteration that might affect tag-table emission.
+
 
 ## Tag Table Infrastructure
 - `source/BAMTagBuffer.{h,cpp}`: thread-safe accumulator of `BAMTagEntry` (`recordIndex`, `iReadAll`). Internally reserves capacity, guards against `uint32_t` overflow, and exposes `writeTagBinary()` to emit a compact stream.
