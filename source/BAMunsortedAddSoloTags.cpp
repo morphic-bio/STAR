@@ -124,16 +124,22 @@ void BAMunsortedAddSoloTags(const std::string &tmpPath,
                        ", aux=0x" + std::to_string(aux));
         }
         
-        if (iread >= solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo.size()) {
+        // Validate that iread is within range for legacy or packed storage
+#ifdef SOLO_USE_PACKED_READINFO
+        size_t nReadsAvail = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->packedReadInfo.data.size();
+#else
+        size_t nReadsAvail = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo.size();
+#endif
+        if (iread >= nReadsAvail) {
             if (g_debugTag) {
                 logDebugTag("ERROR: Invalid iread=" + std::to_string(iread) + 
                            " at record " + std::to_string(recordsProcessed) + 
-                           " (readInfo.size=" + std::to_string(solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo.size()) + 
+                           " (readsAvailable=" + std::to_string(nReadsAvail) + 
                            ", full trailer=0x" + std::to_string(trailer) + ")");
             }
             ostringstream errOut;
             errOut << "EXITING because of fatal ERROR: Invalid read index " << iread << " in trailer\n";
-            errOut << "Record: " << recordsProcessed << ", readInfo.size: " << solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo.size() << "\n";
+            errOut << "Record: " << recordsProcessed << ", readsAvailable: " << nReadsAvail << "\n";
             errOut << "Full trailer: 0x" << std::hex << trailer << std::dec << " (iread=" << iread << ", aux=0x" << std::hex << aux << std::dec << ")\n";
             errOut << "SOLUTION: check for corrupted tmp file or upstream indexing issues: " << tmpPath << "\n";
             errOut << "NOTE: If you ran with --soloSkipProcessing yes, ensure readInfo was populated by the minimal pipeline.\n";
@@ -142,10 +148,15 @@ void BAMunsortedAddSoloTags(const std::string &tmpPath,
         
         // Phase 4: Debug logging for first few records
         if (g_debugTag && recordsProcessed < 5) {
+#ifdef SOLO_USE_PACKED_READINFO
+            uint8_t status = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->packedReadInfo.getStatus(iread);
+            bool hasCB = (status == 1);
+            bool hasUMI = (status == 1);
+#else
             const auto& readData = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo[iread];
             bool hasCB = (readData.cb != (uint64)-1);
             bool hasUMI = (readData.umi != (uint32)-1);
-            
+#endif
             logDebugTag("Record " + std::to_string(recordsProcessed) + 
                        ": iread=" + std::to_string(iread) + 
                        ", hasCB=" + (hasCB ? "true" : "false") + 

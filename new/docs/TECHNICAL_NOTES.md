@@ -80,6 +80,10 @@ Run the standard mapping pipeline, then bypass Solo counting/matrix generation w
 - `source/SoloFeature_writeTagTable.cpp`: orchestrates export at the end of Solo processing. Determines bit-widths, logs start/finish, hands ownership to `BAMTagBuffer`, and clears the buffer to release memory.
 - `source/ReadAlignChunk.cpp`: ensures that tag-table-only runs still route unsorted BAM writes through `BAMoutput` while feeding metadata into `BAMTagBuffer` for later export.
 
+### ReadInfo Sink Abstraction
+- `source/SoloReadFeature_inputRecords.cpp` now offers an overload that accepts a sink callback to record `(readId, cbIdx, umi, status)` directly. This removes the need for a temporary legacy `readInfo` buffer when `SOLO_USE_PACKED_READINFO` is enabled.
+- Call sites in `SoloFeature_countCBgeneUMI.cpp` and `SoloFeature_prepareReadInfoOnly.cpp` pass a lambda that routes to `SoloFeature::recordReadInfo`, maintaining parity and reducing memory overhead.
+
 ## Safety & Diagnostics
 - All new allocations are wrapped with `try/catch` to convert `std::bad_alloc` into actionable error messages.
 - Parameter mismatches (unsupported feature sets, missing CB/UB requests) produce fatal errors with explicit "SOLUTION" guidance for parity with upstream messaging.

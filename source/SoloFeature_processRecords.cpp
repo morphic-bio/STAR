@@ -49,12 +49,20 @@ void SoloFeature::processRecords()
         // Write tag table if requested (readInfo is now available)
         writeTagTableIfRequested(false);
 
-        // Sanity check: ensure readInfo is populated for all reads
+        // Sanity check: ensure readInfo is populated for all reads (legacy or packed)
+#ifdef SOLO_USE_PACKED_READINFO
+        if (packedReadInfo.data.size() != nReadsInput) {
+            P.inOut->logMain << "WARNING: packedReadInfo size (" << packedReadInfo.data.size() 
+                             << ") does not equal nReadsInput (" << nReadsInput 
+                             << ") in skipProcessing mode" << endl;
+        }
+#else
         if (readInfo.size() != nReadsInput) {
             P.inOut->logMain << "WARNING: readInfo size (" << readInfo.size() 
                              << ") does not equal nReadsInput (" << nReadsInput 
                              << ") in skipProcessing mode" << endl;
         }
+#endif
         
         time(&rawTime);
         P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Solo: skipping counting and matrix output for " 

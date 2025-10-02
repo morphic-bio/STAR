@@ -15,6 +15,10 @@
 
 #include "SoloFilteredCells.h"
 
+#ifdef SOLO_USE_PACKED_READINFO
+#include "PackedReadInfo.h"
+#endif
+
 class SoloFeature {
 private:
     Parameters &P;
@@ -34,7 +38,7 @@ public:
     SoloReadBarcode *readBarSum;
 
     const int32 featureType;   
-
+    
     uint64 nReadsMapped, nReadsInput; //total number of mapped reads
     uint32 nCB;
     uint32 featuresNumber; //number of features (i.e. genes, SJs, etc)
@@ -71,7 +75,11 @@ public:
     
     array<vector<uint64>,2> sjAll;
     
-    vector<readInfoStruct> readInfo; //corrected CB/UMI information for each read
+#ifndef SOLO_USE_PACKED_READINFO
+    vector<readInfoStruct> readInfo; //legacy corrected CB/UMI information for each read
+#else
+    PackedReadInfo packedReadInfo;   // new packed representation (8 bytes per read)
+#endif
     SoloReadFlagClass readFlagCounts;
 
     
@@ -98,6 +106,13 @@ public:
     uint32 umiArrayCorrect_Directional(const uint32 nU0, uintUMI *umiArr, const bool readInfoRec, const bool nUMIyes, unordered_map <uintUMI,uintUMI> &umiCorr, const int32 dirCountAdd);
     uint32 umiArrayCorrect_Graph      (const uint32 nU0, uintUMI *umiArr, const bool readInfoRec, const bool nUMIyes, unordered_map <uintUMI,uintUMI> &umiCorr);
 
+    // Helpers to abstract legacy vs packed readInfo storage
+    void resetPackedStorage(uint32_t nReads);
+    void recordReadInfo(uint32_t readId, uint32_t cbIdx, uint32_t umiPacked, uint8_t status);
+    uint32_t getPackedCB(uint32_t readId) const;
+    uint32_t getPackedUMI(uint32_t readId) const;
+    uint8_t  getPackedStatus(uint32_t readId) const;
+
     void outputResults(bool cellFilterYes, string outputPrefixMat);
     void addBAMtags(char *&bam0, uint32 &size0, char* bam1);
     void statsOutput();
@@ -109,6 +124,9 @@ public:
     
     void writeTagTableIfRequested(bool filteredPass);
     void finalizeTagTableFromReadInfo(); // Helper to update BAMTagBuffer from readInfo
+#ifdef SOLO_USE_PACKED_READINFO
+    void initPackedReadInfo(uint32_t nReads) { packedReadInfo.init(nReads, pSolo.cbWLstr.size(), pSolo.umiL); }
+#endif
 };
 
 #endif

@@ -87,6 +87,14 @@ If this error appears, the debug instrumentation will provide:
 3. **Analyze results**: Look for the specific memory corruption pattern
 4. **Report findings**: The debug output will provide actionable diagnostics
 
+## Packed ReadInfo Parity Status
+
+- Legacy build: make STAR (OK)
+- Packed build: make STAR CXXFLAGS+=' -DSOLO_USE_PACKED_READINFO' (OK)
+- Binary tag sentinel parity: fixed (packed writer writes CB+1 when status==1)
+- Init path: temporary legacy buffers removed via sink abstraction
+- Pending: run parity on representative dataset and record BAM/tag equality
+
 ## Estimated Runtime
 
 With single lane data and 8 threads:

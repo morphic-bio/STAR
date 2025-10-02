@@ -26,6 +26,55 @@ SoloFeature::SoloFeature(Parameters &Pin, ReadAlignChunk **RAchunk, Transcriptom
     };    
 };
 
+// Shared helper implementations for readInfo management
+void SoloFeature::resetPackedStorage(uint32_t nReads)
+{
+#ifdef SOLO_USE_PACKED_READINFO
+    packedReadInfo.init(nReads, pSolo.cbWLstr.size(), pSolo.umiL);
+#else
+    readInfo.resize(nReads, {(uint64)-1, (uint32)-1});
+#endif
+}
+
+void SoloFeature::recordReadInfo(uint32_t readId, uint32_t cbIdx, uint32_t umiPacked, uint8_t status)
+{
+#ifdef SOLO_USE_PACKED_READINFO
+    packedReadInfo.set(readId, cbIdx, umiPacked, status);
+#else
+    readInfo[readId].cb = cbIdx;
+    readInfo[readId].umi = umiPacked;
+#endif
+}
+
+uint32_t SoloFeature::getPackedCB(uint32_t readId) const
+{
+#ifdef SOLO_USE_PACKED_READINFO
+    return packedReadInfo.getCB(readId);
+#else
+    return (uint32_t)readInfo[readId].cb;
+#endif
+}
+
+uint32_t SoloFeature::getPackedUMI(uint32_t readId) const
+{
+#ifdef SOLO_USE_PACKED_READINFO
+    return packedReadInfo.getUMI(readId);
+#else
+    return readInfo[readId].umi;
+#endif
+}
+
+uint8_t SoloFeature::getPackedStatus(uint32_t readId) const
+{
+#ifdef SOLO_USE_PACKED_READINFO
+    return packedReadInfo.getStatus(readId);
+#else
+    if (readInfo[readId].cb == (uint64)-1) return 0;
+    if (readInfo[readId].umi == (uint32)-1) return 2;
+    return 1;
+#endif
+}
+
 void SoloFeature::clearLarge()
 {
     cbFeatureUMImap.clear();

@@ -45,7 +45,8 @@ CFLAGS ?= -pipe -Wall -Wextra -O3
 CXXFLAGS_SIMD ?= -mavx2
 
 # Unconditionally set essential flags and optimization options
-CXXFLAGS_common := -std=c++11 -fopenmp $(COMPTIMEPLACE) $(GIT_BRANCH_COMMIT_DIFF)
+# Enable packed ReadInfo by default; legacy path can be re-enabled by removing this define
+CXXFLAGS_common := -std=c++11 -fopenmp -DSOLO_USE_PACKED_READINFO $(COMPTIMEPLACE) $(GIT_BRANCH_COMMIT_DIFF)
 CXXFLAGS_main := -O3 $(CXXFLAGS_common)
 CXXFLAGS_gdb := -O0 -g3 $(CXXFLAGS_common)
 
@@ -68,7 +69,7 @@ OBJECTS = systemFunctions.o funPrimaryAlignMark.o \
 	SoloReadBarcode.o SoloReadBarcode_getCBandUMI.o SoloBarcode_extractBarcode.o \
 	SoloReadFeature.o SoloReadFeature_record.o SoloReadFeature_inputRecords.o \
 	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_prepareReadInfoOnly.o SoloFeature_addBAMtags.o SoloFeature_writeTagTable.o \
-	BAMTagBuffer.o BAMTagBinaryWriter.o \
+	BAMTagBuffer.o BAMTagBinaryWriter.o PackedReadInfo.o \
 	ReadAlign_transformGenome.o Genome_transformGenome.o Transcript_convertGenomeCigar.o \
 	twoPassRunPass1.o samHeaders.o Genome_genomeLoad.o Genome_genomeOutLoad.o Transcript_transformGenome.o ReadAlign_outputSpliceGraphSAM.o \
 	ReadAlign_mapOneReadSpliceGraph.o SpliceGraph.o SpliceGraph_swScoreSpliced.o SpliceGraph_swTraceBack.o \
@@ -112,6 +113,14 @@ SOURCES := $(wildcard *.cpp) $(wildcard *.c)
 	$(CXX) -c $(CPPFLAGS) $(CFLAGS) $<
 
 all: cleanCompileInfo STAR$(SFX)
+.PHONY: test_packed_readinfo
+test_packed_readinfo:
+	$(CXX) -std=c++11 -I./ $(CPPFLAGS) $(CXXFLAGS) ../test/PackedReadInfo_test.cpp PackedReadInfo.cpp -o ../test/pri_test
+	../test/pri_test
+
+.PHONY: test
+test: test_packed_readinfo
+
 
 opal/opal.o : opal/opal.cpp opal/opal.h
 	cd opal && \

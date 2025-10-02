@@ -31,7 +31,7 @@ void SoloFeature::collapseUMIall(bool minimalMode)
     };
     
     // After all CB/UB values are finalized, update the BAMTagBuffer if tag table export is enabled
-    if (!minimalMode && pSolo.writeTagTableEnabled && pSolo.bamTagBuffer && readInfo.size() > 0) {
+    if (!minimalMode && pSolo.writeTagTableEnabled && pSolo.bamTagBuffer) {
         finalizeTagTableFromReadInfo();
     }
 };
@@ -150,7 +150,7 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
                 umiGeneMapCount0[umiArray[iu+0]][iG]+=umiArray[iu+1];//this sums read counts over UMIs that were collapsed
             };
                 
-            umiArrayCorrect_CR(nU0, umiArray.data(), readInfo.size()>0, false, umiCorrected[iG]);
+            umiArrayCorrect_CR(nU0, umiArray.data(), true, false, umiCorrected[iG]);
                 
             for (uint64 iu=0; iu<nU0*umiArrayStride; iu+=umiArrayStride) {//just fill the umiGeneMapCount - will calculate UMI counts later
                 umiGeneMapCount[umiArray[iu+2]][iG]+=umiArray[iu+1];//this sums read counts over UMIs that were collapsed
@@ -168,13 +168,13 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
         if (nU0>0) {
             // Run dedup corrections but write matrices only if not minimal
             if (pSolo.umiDedup.yes.CR)
-                umiArrayCorrect_CR(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::CR, !minimalMode, umiCorrected[iG]);
+                umiArrayCorrect_CR(nU0, umiArray.data(), pSolo.umiDedup.typeMain==UMIdedup::typeI::CR, !minimalMode, umiCorrected[iG]);
             if (pSolo.umiDedup.yes.Directional)
-                umiArrayCorrect_Directional(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional, !minimalMode, umiCorrected[iG], 0);
+                umiArrayCorrect_Directional(nU0, umiArray.data(), pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional, !minimalMode, umiCorrected[iG], 0);
             if (pSolo.umiDedup.yes.Directional_UMItools)
-                umiArrayCorrect_Directional(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional_UMItools, !minimalMode, umiCorrected[iG], -1);
+                umiArrayCorrect_Directional(nU0, umiArray.data(), pSolo.umiDedup.typeMain==UMIdedup::typeI::Directional_UMItools, !minimalMode, umiCorrected[iG], -1);
             if (pSolo.umiDedup.yes.All)
-                umiArrayCorrect_Graph(nU0, umiArray.data(), readInfo.size()>0 && pSolo.umiDedup.typeMain==UMIdedup::typeI::All, !minimalMode, umiCorrected[iG]);
+                umiArrayCorrect_Graph(nU0, umiArray.data(), pSolo.umiDedup.typeMain==UMIdedup::typeI::All, !minimalMode, umiCorrected[iG]);
             if (!minimalMode) {
                 if (pSolo.umiDedup.yes.Exact)
                     countCellGeneUMI[countCellGeneUMIindex[iCB+1] + pSolo.umiDedup.countInd.Exact] = nU0;
@@ -194,17 +194,27 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
             };
         }
         
+#ifdef SOLO_USE_PACKED_READINFO
+        {
+            for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
+                uint64 iread1 = rGU1[iR+rguR];
+                uint32 umi=rGU1[iR+rguU];
+                if (umiCorrected[iG].count(umi)>0)
+                    umi=umiCorrected[iG][umi]; //correct UMI
+                recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
+            };
+        }
+#else
         if (readInfo.size()>0) {//record cb/umi for each read
             for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
                 uint64 iread1 = rGU1[iR+rguR];
-                readInfo[iread1].cb = indCB[iCB] ;
                 uint32 umi=rGU1[iR+rguU];
-                
                 if (umiCorrected[iG].count(umi)>0)
                     umi=umiCorrected[iG][umi]; //correct UMI
-                readInfo[iread1].umi=umi;
+                recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
             };      
-        };            
+        };
+#endif            
     };
 
     if (pSolo.umiFiltering.MultiGeneUMI_CR) {
@@ -212,8 +222,7 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
         vector<uint32> geneCounts(nGenes,0);
         
         vector<unordered_set<uintUMI>> geneUmiHash;
-        if (readInfo.size()>0)
-            geneUmiHash.resize(nGenes);
+        geneUmiHash.resize(nGenes);
         
         for (const auto &iu: umiGeneMapCount) {//loop over UMIs for all genes
                        
@@ -239,8 +248,7 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
 
             if ( maxg+1!=0 ) {//this UMI is counted
                 geneCounts[maxg]++;
-                if (readInfo.size()>0)
-                    geneUmiHash[maxg].insert(iu.first);
+                geneUmiHash[maxg].insert(iu.first);
             };
         };
 
@@ -256,26 +264,41 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
             };
         }
         
+#ifdef SOLO_USE_PACKED_READINFO
+        {
+            for (uint32 iG=0; iG<nGenes; iG++) {//cycle over genes
+                uint32 *rGU1=rGU+gReadS[iG];            
+                for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
+                    uint64 iread1 = rGU1[iR+rguR];
+                    uint32 umi=rGU1[iR+rguU];
+                    if (umiCorrected[iG].count(umi)>0)
+                        umi=umiCorrected[iG][umi]; //correct UMI
+                    if (geneUmiHash[iG].count(umi)>0) {
+                        recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
+                    } else {
+                        recordReadInfo((uint32_t)iread1, indCB[iCB], (uint32_t)-1, 2);
+                    };
+                };
+            };
+        }
+#else
         if (readInfo.size()>0) {//record cb/umi for each read
             for (uint32 iG=0; iG<nGenes; iG++) {//cycle over genes
                 uint32 *rGU1=rGU+gReadS[iG];            
                 for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
                     uint64 iread1 = rGU1[iR+rguR];
-                    readInfo[iread1].cb = indCB[iCB];
                     uint32 umi=rGU1[iR+rguU];
-                    
                     if (umiCorrected[iG].count(umi)>0)
                         umi=umiCorrected[iG][umi]; //correct UMI
-
-                    //cout << iG << "-" << iR << " " <<flush ;
                     if (geneUmiHash[iG].count(umi)>0) {
-                        readInfo[iread1].umi=umi;
+                        recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
                     } else {
-                        readInfo[iread1].umi=(uintUMI) -1;
+                        recordReadInfo((uint32_t)iread1, indCB[iCB], (uint32_t)-1, 2);
                     };
                 };
             };
         };
+#endif
     };
     
     //////////////////////////////////////////multi-gene reads to the end of function
@@ -285,13 +308,21 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
     
     if (nGenesMult>0) {//process multigene reads
         
+#ifdef SOLO_USE_PACKED_READINFO
+        {
+            for (uint32 iR=gReadS[nGenes]; iR<gReadS[nGenes+nGenesMult]; iR+=rguStride) {//cycle over multi-gene reads to record their CB and UMI, no corrections
+                uint64 iread1 = rGU[iR+rguR];
+                recordReadInfo((uint32_t)iread1, indCB[iCB], rGU[iR+rguU], 1);
+            };
+        }
+#else
         if (readInfo.size()>0) {
             for (uint32 iR=gReadS[nGenes]; iR<gReadS[nGenes+nGenesMult]; iR+=rguStride) {//cycle over multi-gene reads to record their CB and UMI, no corrections
                 uint64 iread1 = rGU[iR+rguR];
-                readInfo[iread1].cb = indCB[iCB];
-                readInfo[iread1].umi = rGU[iR+rguU];
+                recordReadInfo((uint32_t)iread1, indCB[iCB], rGU[iR+rguU], 1);
             };
         };
+#endif
         
         std::vector<vector<uint32>> umiGenes;
         umiGenes.reserve(256);

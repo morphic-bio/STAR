@@ -13,9 +13,13 @@ void SoloFeature::countCBgeneUMI()
         rguStride=3; //to keep readI column
 
     if (pSolo.readInfoYes[featureType]) {
-        readInfo.resize(nReadsInput,{(uint64)-1,(uint32)-1});
+        resetPackedStorage(nReadsInput);
         time(&rawTime);
-        P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Allocated and initialized readInfo array, nReadsInput = " << nReadsInput <<endl;        
+#ifdef SOLO_USE_PACKED_READINFO
+        P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Allocated and initialized packed readInfo array, nReadsInput = " << nReadsInput <<endl;
+#else
+        P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Allocated and initialized readInfo array, nReadsInput = " << nReadsInput <<endl;
+#endif
     };
     
 
@@ -43,10 +47,20 @@ void SoloFeature::countCBgeneUMI()
     readFlagCounts.flagCounts.reserve(nCB*3/2);
     readFlagCounts.flagCountsNoCB = {};
     vector<uint32> nReadPerCBunique1(pSolo.cbWLsize), nReadPerCBmulti1(pSolo.cbWLsize); //temp arrays to record # of reads for all cells in the WL
+#ifdef SOLO_USE_PACKED_READINFO
+    auto sink = [this](uint64 readId, uint32 cbIdx, uint32 umiPacked, uint8 status){
+        recordReadInfo((uint32_t)readId, cbIdx, umiPacked, status);
+    };
+    for (int ii=0; ii<P.runThreadN; ii++) {
+        readFeatAll[ii]->inputRecords(rCBpa, rguStride, readBarSum->cbReadCountExact, readFlagCounts, nReadPerCBunique1, nReadPerCBmulti1, sink);
+        readFeatSum->addStats(*readFeatAll[ii]);
+    };
+#else
     for (int ii=0; ii<P.runThreadN; ii++) {//TODO: this can be parallelized
         readFeatAll[ii]->inputRecords(rCBpa, rguStride, readBarSum->cbReadCountExact, readInfo, readFlagCounts, nReadPerCBunique1, nReadPerCBmulti1);
         readFeatSum->addStats(*readFeatAll[ii]);//sum stats: has to be done after inputRecords, since the stats values are updated there
     };
+#endif
     readFlagCounts.countsAddNoCBarray(readFeatSum->readFlag.flagCountsNoCB);//add no-CB counts calculated in SoloReadFeature_record.cpp and not recorded to temp Solo files
 
     nReadPerCBtotal.resize(nCB);

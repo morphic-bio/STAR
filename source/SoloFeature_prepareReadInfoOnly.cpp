@@ -14,12 +14,18 @@ void SoloFeature::prepareReadInfoOnly()
         return;
     }
     
-    // Allocate and initialize readInfo (same as countCBgeneUMI line 15-19)
-    readInfo.resize(nReadsInput, {(uint64)-1, (uint32)-1});
+    // Allocate and initialize readInfo (same as countCBgeneUMI init)
+    resetPackedStorage(nReadsInput);
     time(&rawTime);
+#ifdef SOLO_USE_PACKED_READINFO
+    P.inOut->logMain << timeMonthDayTime(rawTime) 
+                     << " ... Allocated packed readInfo array for skipProcessing mode, nReadsInput = " 
+                     << nReadsInput << endl;
+#else
     P.inOut->logMain << timeMonthDayTime(rawTime) 
                      << " ... Allocated readInfo array for skipProcessing mode, nReadsInput = " 
                      << nReadsInput << endl;
+#endif
     
     // We need to call inputRecords to populate readInfo from the temporary Solo files
     // but we don't need the heavy rGeneUMI array or counting structures
@@ -56,12 +62,25 @@ void SoloFeature::prepareReadInfoOnly()
     readFlagCounts.flagCountsNoCB = {};
     vector<uint32> nReadPerCBunique1(pSolo.cbWLsize), nReadPerCBmulti1(pSolo.cbWLsize);
     
+#ifdef SOLO_USE_PACKED_READINFO
+    auto sink = [this](uint64 readId, uint32 cbIdx, uint32 umiPacked, uint8 status){
+        recordReadInfo((uint32_t)readId, cbIdx, umiPacked, status);
+    };
+    for (int ii = 0; ii < P.runThreadN; ii++) {
+        readFeatAll[ii]->inputRecords(rCBpa, rguStride, readBarSum->cbReadCountExact, 
+                                      readFlagCounts, 
+                                      nReadPerCBunique1, nReadPerCBmulti1,
+                                      sink);
+        readFeatSum->addStats(*readFeatAll[ii]);
+    }
+#else
     for (int ii = 0; ii < P.runThreadN; ii++) {
         readFeatAll[ii]->inputRecords(rCBpa, rguStride, readBarSum->cbReadCountExact, 
                                       readInfo, readFlagCounts, 
                                       nReadPerCBunique1, nReadPerCBmulti1);
         readFeatSum->addStats(*readFeatAll[ii]);
     }
+#endif
 
     // Instead of manually assigning readInfo here, traverse the rGU structure
     // through collapseUMIall in minimal mode to apply UMI corrections and

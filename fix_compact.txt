@@ -1,0 +1,71 @@
+FIX COMPACT PLAN GAPS RUNBOOK
+=============================
+
+Stage 0 – Preparation
+---------------------
+0.1 Confirm you are on the feature branch that hosts the packed-readinfo scaffolding (currently `feat/packed-readinfo-8byte`).
+0.2 Ensure the tree builds (`make STAR`) before making changes; keep a clean build log for parity tests later.
+0.3 Snapshot current outputs if you need before/after comparisons (`cp Aligned.out.bam legacy.Aligned.out.bam`, etc.).
+
+Stage 1 – Fix Binary Tag Sentinel Regression
+--------------------------------------------
+1.1 Edit `source/BAMTagBuffer.cpp` inside `writeTagBinaryPacked`.
+1.2 When `statusBit == 1`, set `uint64_t cbIdx = (uint64_t)cb + 1;` (matching legacy sentinel). Keep 0 when `statusBit == 0`.
+1.3 Add an inline comment noting parity with legacy writer and update any TODO referencing sentinel parity.
+1.4 Rebuild (`make BAMTagBuffer.o`) to ensure no compile errors before moving on.
+
+Stage 2 – Eliminate Temporary Legacy Buffers in Init Paths
+----------------------------------------------------------
+2.1 Inspect `SoloReadFeature::inputRecords` (in `source/SoloReadFeature_inputRecords.cpp`) to understand how it fills `readInfo`.
+2.2 Add a compile-time branch so, when `SOLO_USE_PACKED_READINFO` is on, the function calls a provided lambda (or helper) instead of requiring a `vector<readInfoStruct>&` target. Suggested approach:
+     • Introduce a lightweight struct or functor parameter (e.g., `ReadInfoSink sink`) with `set(readId, cbIdx, umi, status)`.
+     • Legacy builds provide a sink wrapping the vector; packed builds provide one that writes to `PackedReadInfo` via `recordReadInfo`.
+2.3 Update call sites (`SoloFeature_countCBgeneUMI.cpp`, `SoloFeature_prepareReadInfoOnly.cpp`) to pass the new sink rather than creating `readInfoTemp`.
+2.4 Remove the temporary `vector<readInfoStruct>` allocations and the follow-up loops that copy into `packedReadInfo`.
+2.5 Ensure logs still emit sensible messages (adjust wording if necessary to reflect packed storage).
+
+Stage 3 – Consolidate Accessor Usage
+------------------------------------
+3.1 Update `SoloFeature::addBAMtags` to rely on `getPackedCB/UMI/Status` in both branches:
+     • Replace direct `readInfo[...]` access with helper calls.
+     • Move UMI decoding into a shared static helper or lambda to avoid duplicated reverse loops.
+3.2 Audit other files that still access `readInfo` directly when the packed flag is enabled (e.g., `BAMunsortedAddSoloTags.cpp`). Route them through the helper trio or a common helper API.
+3.3 After refactoring, delete any `.bak` files that were only scaffolding artifacts (`source/*.bak`).
+
+Stage 4 – Strengthen PackedReadInfo Guards
+------------------------------------------
+4.1 In `PackedReadInfo::set`, add runtime checks:
+     • If `cbIdx > maskCB()` and `maskCB()!=0`, throw or emit `runtime_error`.
+     • If `umiPacked > maskUMI()` and `maskUMI()!=0`, likewise guard.
+4.2 Consider adding these checks inside `pack` so all writers benefit.
+4.3 Ensure zero-length UMI configurations still pass (guards should short-circuit when masks are zero).
+
+Stage 5 – Add Focused Tests
+---------------------------
+5.1 Create `test/PackedReadInfo_test.cpp` (or extend existing test suite) covering:
+     • Pack/unpack round-trips for random CB/UMI/status values.
+     • Sentinel overflow guards (expect exceptions when indices exceed masks).
+     • Zero-UMI configuration behaviour.
+5.2 Add tests for the binary writer sentinel:
+     • Build a minimal fixture that writes a record with status=1 and confirm the emitted CB index equals original + 1.
+     • If full C++ tests are heavy, add a Python smoke test that reads the binary file with `tools/decode_tag_binary.cpp`.
+5.3 Wire the tests into the build (update CMake/Makefile as needed) and document the run command (`ctest -R PackedReadInfo` or equivalent).
+
+Stage 6 – Validation Run
+------------------------
+6.1 Rebuild legacy and packed binaries (`make clean && make STAR`, then rebuild with `CXXFLAGS+=' -DSOLO_USE_PACKED_READINFO'`).
+6.2 Run the representative dataset twice (legacy vs packed) and compare outputs:
+     • `python new/scripts/verify_packed_vs_legacy.py legacy.Aligned.out.bam packed.Aligned.out.bam`
+     • Compare binary tag streams (now expecting equality again).
+6.3 Capture `/usr/bin/time -v` metrics for both runs and update `DEBUG_RUN_STATUS.md`.
+6.4 Ensure no unexpected `.bak` files remain (`find source -name '*.bak'`).
+
+Stage 7 – Documentation & Checklist Updates
+-------------------------------------------
+7.1 Update `new/docs/packed_readinfo_design.md`:
+     • Mark checklist items for sentinel fix, helper consolidation, guards, and tests as completed.
+     • Note the removal of temporary legacy buffers in the scaffold gap section.
+7.2 Add a short entry to `TECHNICAL_NOTES.md` describing the new `ReadInfoSink` (or equivalent) abstraction if implemented.
+7.3 Summarise work and test results in `DEBUG_RUN_STATUS.md`, recording commit hash, flags, and parity outcome.
+7.4 Run `git status` to verify only intended files changed; stage + commit when ready.
+
