@@ -15,6 +15,10 @@
 
 #include "SoloFilteredCells.h"
 
+#ifdef SOLO_USE_PACKED_READINFO
+#include "PackedReadInfo.h"
+#endif
+
 class SoloFeature {
 private:
     Parameters &P;
@@ -34,7 +38,7 @@ public:
     SoloReadBarcode *readBarSum;
 
     const int32 featureType;   
-
+    
     uint64 nReadsMapped, nReadsInput; //total number of mapped reads
     uint32 nCB;
     uint32 featuresNumber; //number of features (i.e. genes, SJs, etc)
@@ -71,7 +75,11 @@ public:
     
     array<vector<uint64>,2> sjAll;
     
-    vector<readInfoStruct> readInfo; //corrected CB/UMI information for each read
+#ifndef SOLO_USE_PACKED_READINFO
+    vector<readInfoStruct> readInfo; //legacy corrected CB/UMI information for each read
+#else
+    PackedReadInfo packedReadInfo;   // new packed representation (8 bytes per read)
+#endif
     SoloReadFlagClass readFlagCounts;
 
     
@@ -109,6 +117,9 @@ public:
     
     void writeTagTableIfRequested(bool filteredPass);
     void finalizeTagTableFromReadInfo(); // Helper to update BAMTagBuffer from readInfo
+#ifdef SOLO_USE_PACKED_READINFO
+    void initPackedReadInfo(uint32_t nReads) { packedReadInfo.init(nReads, pSolo.cbWLstr.size(), pSolo.umiL); }
+#endif
 };
 
 #endif

@@ -19,27 +19,26 @@ void SoloFeature::writeTagTableIfRequested(bool filteredPass)
     time_t rawTime;
     time(&rawTime);
     
-    // Compute bit widths for binary format
-    uint64_t cbBits = std::max<uint64_t>(1, BAMTagBinaryWriter::integerLog2ceil(pSolo.cbWLstr.size() + 1)); // +1 for 0=missing
-    uint64_t umiBits = pSolo.umiL * 2; // 2 bits per base for packed UMI
-    
-    // Guard against excessive UMI bit widths
+    uint64_t cbBits = std::max<uint64_t>(1, BAMTagBinaryWriter::integerLog2ceil(pSolo.cbWLstr.size() + 1));
+    uint64_t umiBits = pSolo.umiL * 2; // 2 bits per base
     if (umiBits > 32) {
-        P.inOut->logMain << "WARNING: UMI length " << pSolo.umiL << " requires " << umiBits 
-                         << " bits, which exceeds 32-bit limit. UMIs may be truncated." << endl;
+        P.inOut->logMain << "WARNING: UMI length " << pSolo.umiL << " requires " << umiBits
+                         << " bits, truncating to 32" << endl;
         umiBits = 32;
     }
     
-    P.inOut->logMain << timeMonthDayTime(rawTime) 
-                     << " ... Writing binary tag stream from BAMTagBuffer to " << pSolo.writeTagTablePath 
+    P.inOut->logMain << timeMonthDayTime(rawTime)
+                     << " ... Writing binary tag stream to " << pSolo.writeTagTablePath
                      << " (32-byte header + records, CB:" << cbBits << " bits, UMI:" << umiBits << " bits)" << endl;
-    
-    // Use BAMTagBuffer to write the binary tag stream
+
+#ifndef SOLO_USE_PACKED_READINFO
     pSolo.bamTagBuffer->writeTagBinary(pSolo.writeTagTablePath, readInfo, cbBits, umiBits);
-    
-    // Clear the buffer to free memory
+#else
+    pSolo.bamTagBuffer->writeTagBinaryPacked(pSolo.writeTagTablePath, packedReadInfo, cbBits, umiBits);
+#endif
+
     pSolo.bamTagBuffer->clear();
-    
     time(&rawTime);
-    P.inOut->logMain << timeMonthDayTime(rawTime) << " ... Finished writing binary tag stream and cleared buffer" << endl;
+    P.inOut->logMain << timeMonthDayTime(rawTime)
+                     << " ... Finished writing binary tag stream and cleared buffer" << endl;
 }
