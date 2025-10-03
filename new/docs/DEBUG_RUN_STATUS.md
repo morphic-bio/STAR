@@ -87,13 +87,38 @@ If this error appears, the debug instrumentation will provide:
 3. **Analyze results**: Look for the specific memory corruption pattern
 4. **Report findings**: The debug output will provide actionable diagnostics
 
-## Packed ReadInfo Parity Status
+## Packed ReadInfo Implementation Status (Stages 0-7 Complete)
 
-- Legacy build: make STAR (OK)
-- Packed build: make STAR CXXFLAGS+=' -DSOLO_USE_PACKED_READINFO' (OK)
-- Binary tag sentinel parity: fixed (packed writer writes CB+1 when status==1)
-- Init path: temporary legacy buffers removed via sink abstraction
-- Pending: run parity on representative dataset and record BAM/tag equality
+### Stage Summary
+- **Stage 0** (Setup): ✅ Branch verified, clean build, baseline captured
+- **Stage 1** (Baseline Test): ✅ `test/SoloReadInfoBaseline_test.cpp` covers readIndexNo/Yes, multi-match, probes
+- **Stage 2** (Loader): ✅ `SoloReadInfoLoader` with `ReadInfoRecord`, `RecordSink`, unit tests
+- **Stage 3** (Sinks): ✅ `MinimalSink` and `CountingSink` implemented, tested
+- **Stage 4** (Call Sites): ✅ `countCBgeneUMI()` and `prepareReadInfoOnly()` refactored
+- **Stage 5** (Parity): ✅ Production run confirmed BAM/BIN/ZG identity (see `Stage5_summary.txt`)
+- **Stage 6** (Cleanup): ✅ Legacy paths removed, `readInfoStruct` deleted, compile flag removed
+- **Stage 7** (Verification): ✅ Docs updated, tests pass (`make clean && make STAR && make test`)
+
+### Memory Comparison (Expected)
+- **Legacy** (hypothetical): 16 bytes/read (padded `readInfoStruct`)
+- **Packed**: 8 bytes/read (single `uint64`)
+- **Reduction**: ~50% memory footprint for per-read info
+- **Pending**: Capture actual RSS deltas on full-scale dataset
+
+### Test Results
+| Test | Status | Notes |
+|------|--------|-------|
+| `test_packed_readinfo` | ✅ PASS | Packing/unpacking, overflow guards |
+| `test_SoloReadInfoBaseline` | ✅ PASS | Legacy behavior capture |
+| `test_SoloReadInfoLoader` | ✅ PASS | Parser logic, sentinels |
+| `test_SoloReadInfoParity` | ✅ PASS | Minimal vs counting equivalence |
+| `test_MinimalSink` | ⚠️ SKIP | Requires `STAR_TXOME_DIR` |
+| `skip_processing_test.sh` | ✅ PASS | End-to-end BAM/BIN parity |
+
+### Production Readiness
+- **Status**: Ready for final validation
+- **Remaining**: Full-scale stress test, velocyto check, memory profiling
+- **Docs**: See `PRODUCTION_READINESS.md` for deployment checklist
 
 ## Estimated Runtime
 

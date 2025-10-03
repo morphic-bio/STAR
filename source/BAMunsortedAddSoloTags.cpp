@@ -124,12 +124,8 @@ void BAMunsortedAddSoloTags(const std::string &tmpPath,
                        ", aux=0x" + std::to_string(aux));
         }
         
-        // Validate that iread is within range for legacy or packed storage
-#ifdef SOLO_USE_PACKED_READINFO
+        // Validate that iread is within range for packed storage
         size_t nReadsAvail = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->packedReadInfo.data.size();
-#else
-        size_t nReadsAvail = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo.size();
-#endif
         if (iread >= nReadsAvail) {
             if (g_debugTag) {
                 logDebugTag("ERROR: Invalid iread=" + std::to_string(iread) + 
@@ -148,15 +144,9 @@ void BAMunsortedAddSoloTags(const std::string &tmpPath,
         
         // Phase 4: Debug logging for first few records
         if (g_debugTag && recordsProcessed < 5) {
-#ifdef SOLO_USE_PACKED_READINFO
             uint8_t status = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->packedReadInfo.getStatus(iread);
             bool hasCB = (status == 1);
             bool hasUMI = (status == 1);
-#else
-            const auto& readData = solo.soloFeat[solo.pSolo.featureInd[solo.pSolo.samAttrFeature]]->readInfo[iread];
-            bool hasCB = (readData.cb != (uint64)-1);
-            bool hasUMI = (readData.umi != (uint32)-1);
-#endif
             logDebugTag("Record " + std::to_string(recordsProcessed) + 
                        ": iread=" + std::to_string(iread) + 
                        ", hasCB=" + (hasCB ? "true" : "false") + 

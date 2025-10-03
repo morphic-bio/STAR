@@ -194,7 +194,6 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
             };
         }
         
-#ifdef SOLO_USE_PACKED_READINFO
         {
             for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
                 uint64 iread1 = rGU1[iR+rguR];
@@ -204,17 +203,6 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
                 recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
             };
         }
-#else
-        if (readInfo.size()>0) {//record cb/umi for each read
-            for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
-                uint64 iread1 = rGU1[iR+rguR];
-                uint32 umi=rGU1[iR+rguU];
-                if (umiCorrected[iG].count(umi)>0)
-                    umi=umiCorrected[iG][umi]; //correct UMI
-                recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
-            };      
-        };
-#endif            
     };
 
     if (pSolo.umiFiltering.MultiGeneUMI_CR) {
@@ -264,7 +252,6 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
             };
         }
         
-#ifdef SOLO_USE_PACKED_READINFO
         {
             for (uint32 iG=0; iG<nGenes; iG++) {//cycle over genes
                 uint32 *rGU1=rGU+gReadS[iG];            
@@ -281,24 +268,6 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
                 };
             };
         }
-#else
-        if (readInfo.size()>0) {//record cb/umi for each read
-            for (uint32 iG=0; iG<nGenes; iG++) {//cycle over genes
-                uint32 *rGU1=rGU+gReadS[iG];            
-                for (uint32 iR=0; iR<gReadS[iG+1]-gReadS[iG]; iR+=rguStride) {//cycle over reads
-                    uint64 iread1 = rGU1[iR+rguR];
-                    uint32 umi=rGU1[iR+rguU];
-                    if (umiCorrected[iG].count(umi)>0)
-                        umi=umiCorrected[iG][umi]; //correct UMI
-                    if (geneUmiHash[iG].count(umi)>0) {
-                        recordReadInfo((uint32_t)iread1, indCB[iCB], umi, 1);
-                    } else {
-                        recordReadInfo((uint32_t)iread1, indCB[iCB], (uint32_t)-1, 2);
-                    };
-                };
-            };
-        };
-#endif
     };
     
     //////////////////////////////////////////multi-gene reads to the end of function
@@ -308,21 +277,12 @@ void SoloFeature::collapseUMIperCB(uint32 iCB, vector<uint32> &umiArray, vector<
     
     if (nGenesMult>0) {//process multigene reads
         
-#ifdef SOLO_USE_PACKED_READINFO
         {
             for (uint32 iR=gReadS[nGenes]; iR<gReadS[nGenes+nGenesMult]; iR+=rguStride) {//cycle over multi-gene reads to record their CB and UMI, no corrections
                 uint64 iread1 = rGU[iR+rguR];
                 recordReadInfo((uint32_t)iread1, indCB[iCB], rGU[iR+rguU], 1);
             };
         }
-#else
-        if (readInfo.size()>0) {
-            for (uint32 iR=gReadS[nGenes]; iR<gReadS[nGenes+nGenesMult]; iR+=rguStride) {//cycle over multi-gene reads to record their CB and UMI, no corrections
-                uint64 iread1 = rGU[iR+rguR];
-                recordReadInfo((uint32_t)iread1, indCB[iCB], rGU[iR+rguU], 1);
-            };
-        };
-#endif
         
         std::vector<vector<uint32>> umiGenes;
         umiGenes.reserve(256);

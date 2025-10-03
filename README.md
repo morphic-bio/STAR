@@ -113,6 +113,24 @@ Located in `new/tests/`:
 - `emit_test.sh` - Binary tag stream and unsorted BAM validation
 - `integration_test.sh` - End-to-end CB/UB patching tests
 - `mem_test_tags.sh` - AddressSanitizer memory safety tests
+- `build_probe_txome_fixture.sh` - Build a tiny probe-only transcriptome for tests
+- `probe_lines_test.sh` - Requires a BAM path argument; analyzes probe-specific lines
+
+To enable transcriptome-dependent tests, build a small genomeDir and set `STAR_TXOME_DIR`:
+```bash
+./new/tests/build_probe_txome_fixture.sh \
+  --fasta /path/to/probes_only.fa \
+  --gtf /path/to/probes_only.gtf \
+  --out /tmp/probe_txome --n 2
+export STAR_TXOME_DIR=/tmp/probe_txome
+unset STAR_TEST_SKIP_TXOME
+make -C source test
+```
+To skip them in CI:
+```bash
+export STAR_TEST_SKIP_TXOME=1
+make -C source test
+```
 
 HARDWARE/SOFTWARE REQUIREMENTS
 ================================

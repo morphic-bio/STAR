@@ -31,11 +31,7 @@ void SoloFeature::writeTagTableIfRequested(bool filteredPass)
                      << " ... Writing binary tag stream to " << pSolo.writeTagTablePath
                      << " (32-byte header + records, CB:" << cbBits << " bits, UMI:" << umiBits << " bits)" << endl;
 
-#ifndef SOLO_USE_PACKED_READINFO
-    pSolo.bamTagBuffer->writeTagBinary(pSolo.writeTagTablePath, readInfo, cbBits, umiBits);
-#else
     pSolo.bamTagBuffer->writeTagBinaryPacked(pSolo.writeTagTablePath, packedReadInfo, cbBits, umiBits);
-#endif
 
     pSolo.bamTagBuffer->clear();
     time(&rawTime);

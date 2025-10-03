@@ -29,50 +29,43 @@ SoloFeature::SoloFeature(Parameters &Pin, ReadAlignChunk **RAchunk, Transcriptom
 // Shared helper implementations for readInfo management
 void SoloFeature::resetPackedStorage(uint32_t nReads)
 {
-#ifdef SOLO_USE_PACKED_READINFO
     packedReadInfo.init(nReads, pSolo.cbWLstr.size(), pSolo.umiL);
-#else
-    readInfo.resize(nReads, {(uint64)-1, (uint32)-1});
-#endif
 }
 
 void SoloFeature::recordReadInfo(uint32_t readId, uint32_t cbIdx, uint32_t umiPacked, uint8_t status)
 {
-#ifdef SOLO_USE_PACKED_READINFO
-    packedReadInfo.set(readId, cbIdx, umiPacked, status);
-#else
-    readInfo[readId].cb = cbIdx;
-    readInfo[readId].umi = umiPacked;
-#endif
+    // Packed path stores validity in status; map sentinels to in-range placeholders.
+    // status: 0=missing CB, 1=good, 2=invalid UMI
+    uint32_t cbStore = cbIdx;
+    uint32_t umiStore = umiPacked;
+    if (status==0) { // missing CB ⇒ clear both
+        cbStore = 0u;
+        umiStore = 0u;
+    } else if (status==2) { // invalid UMI ⇒ clear UMI only
+        if (umiStore == (uint32)-1) umiStore = 0u;
+        // keep cbStore within bounds; if sentinel, clear it
+        if (cbStore == (uint32)-1) cbStore = 0u;
+    } else {
+        // good path: sanitize accidental sentinels
+        if (cbStore == (uint32)-1) cbStore = 0u;
+        if (umiStore == (uint32)-1) umiStore = 0u;
+    }
+    packedReadInfo.set(readId, cbStore, umiStore, status);
 }
 
 uint32_t SoloFeature::getPackedCB(uint32_t readId) const
 {
-#ifdef SOLO_USE_PACKED_READINFO
     return packedReadInfo.getCB(readId);
-#else
-    return (uint32_t)readInfo[readId].cb;
-#endif
 }
 
 uint32_t SoloFeature::getPackedUMI(uint32_t readId) const
 {
-#ifdef SOLO_USE_PACKED_READINFO
     return packedReadInfo.getUMI(readId);
-#else
-    return readInfo[readId].umi;
-#endif
 }
 
 uint8_t SoloFeature::getPackedStatus(uint32_t readId) const
 {
-#ifdef SOLO_USE_PACKED_READINFO
     return packedReadInfo.getStatus(readId);
-#else
-    if (readInfo[readId].cb == (uint64)-1) return 0;
-    if (readInfo[readId].umi == (uint32)-1) return 2;
-    return 1;
-#endif
 }
 
 void SoloFeature::clearLarge()

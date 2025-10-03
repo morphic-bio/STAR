@@ -56,26 +56,6 @@ void BAMTagBuffer::append(const BAMRecordMeta& meta) {
     safe_push_back(entries, BAMTagEntry(meta), "BAMTagBuffer::entries");
 }
 
-#ifndef SOLO_USE_PACKED_READINFO
-void BAMTagBuffer::writeTagBinary(const std::string& outputPath,
-                                   const std::vector<readInfoStruct>& readInfo,
-                                   uint64_t cbBits, uint64_t umiBits) {
-    std::lock_guard<std::mutex> lock(entriesMutex);
-    std::ofstream out(outputPath, std::ios::binary);
-    if (!out.is_open()) { std::cerr << "ERROR: cannot open " << outputPath << std::endl; return; }
-    size_t valid=0; for (auto &e: entries) if (e.readId < readInfo.size()) valid++;
-    BAMTagBinaryWriter writer; TagStreamHeader header(cbBits, umiBits, valid); writer.writeHeader(out, header);
-    std::sort(entries.begin(), entries.end(), [](const BAMTagEntry&a,const BAMTagEntry&b){return a.recordIndex<b.recordIndex;});
-    for (auto &e: entries) {
-        if (e.readId >= readInfo.size()) continue;
-        const readInfoStruct &ri = readInfo[e.readId];
-        uint8_t status = (ri.cb != (uint64)-1 && ri.umi != (uint32)-1) ? 1 : 0;
-        uint64_t cbIdx = status ? (ri.cb + 1) : 0; // 0 reserved
-        uint64_t umi = status ? ri.umi : 0;
-        writer.writeRecord(out, status, cbIdx, umi, header);
-    }
-}
-#else
 void BAMTagBuffer::writeTagBinaryPacked(const std::string& outputPath,
                                         const PackedReadInfo& packed,
                                         uint64_t cbBits, uint64_t umiBits) {
@@ -96,7 +76,6 @@ void BAMTagBuffer::writeTagBinaryPacked(const std::string& outputPath,
         writer.writeRecord(out, statusBit, cbIdx, umi, header);
     }
 }
-#endif
 
 void BAMTagBuffer::clear() {
     std::lock_guard<std::mutex> lock(entriesMutex);

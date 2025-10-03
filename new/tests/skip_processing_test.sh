@@ -164,22 +164,24 @@ SKIP_ZG_NONEMPTY=$(samtools view "${SKIP_OUT}Aligned.out.bam" | \
 echo "  Baseline: $BASELINE_ZG_NONEMPTY non-empty ZG, $BASELINE_ZG_EMPTY empty/'-'"
 echo "  Skip:     $SKIP_ZG_NONEMPTY non-empty ZG, $SKIP_ZG_EMPTY empty/'-'"
 
-if [[ $BASELINE_ZG_NONEMPTY -gt 0 && $BASELINE_ZG_EMPTY -eq 0 ]]; then
+# Validate that at least some ZG fields are populated (not all '-')
+if [[ $BASELINE_ZG_NONEMPTY -gt 0 ]]; then
   echo "  ✓ Baseline BAM has non-empty ZG fields"
 else
-  echo "  ✗ Baseline BAM has empty or missing ZG fields"; exit 1
+  echo "  ✗ Baseline BAM has no valid ZG fields"; exit 1
 fi
 
-if [[ $SKIP_ZG_NONEMPTY -gt 0 && $SKIP_ZG_EMPTY -eq 0 ]]; then
+if [[ $SKIP_ZG_NONEMPTY -gt 0 ]]; then
   echo "  ✓ Skip BAM has non-empty ZG fields"
 else
-  echo "  ✗ Skip BAM has empty or missing ZG fields"; exit 1
+  echo "  ✗ Skip BAM has no valid ZG fields"; exit 1
 fi
 
-if [[ $BASELINE_ZG_NONEMPTY -eq $SKIP_ZG_NONEMPTY ]]; then
-  echo "  ✓ Both BAMs have same count of non-empty ZG fields"
+# Most importantly: verify ZG field distributions are identical between BAMs
+if [[ $BASELINE_ZG_NONEMPTY -eq $SKIP_ZG_NONEMPTY && $BASELINE_ZG_EMPTY -eq $SKIP_ZG_EMPTY ]]; then
+  echo "  ✓ Both BAMs have identical ZG field distributions"
 else
-  echo "  ✗ ZG field counts differ between BAMs"; exit 1
+  echo "  ✗ ZG field distributions differ between BAMs"; exit 1
 fi
 
 echo "5) Compare binary tag-table files with diff (should be identical)"

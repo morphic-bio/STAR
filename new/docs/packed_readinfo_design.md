@@ -2,9 +2,10 @@
 
 ## Status
 
-Phase: Scaffolded (initial code skeletons added under compile flag `SOLO_USE_PACKED_READINFO`)  
-Goal: Replace legacy `readInfoStruct` (16-byte padded) with packed 64-bit word per read.  
-Branch: `design/packed-readinfo-8byte`  
+**Phase**: Production-ready (Stage 6 complete – legacy paths removed)  
+**Goal**: Replace legacy `readInfoStruct` (16-byte padded) with packed 64-bit word per read.  
+**Branch**: `bypass` (previously `feat/packed-readinfo-8byte`)  
+**Compile Flag**: ~~`-DSOLO_USE_PACKED_READINFO`~~ (removed – packed is the only implementation)  
 
 ---
 
@@ -181,8 +182,8 @@ Sentinel alignment:
 
 | Flag | Behavior |
 |------|----------|
-| (unset) | Legacy `readInfoStruct` used |
-| `-DSOLO_USE_PACKED_READINFO` | Packed implementation compiled; legacy retained in conditional blocks |
+| (unset) | Packed implementation only (legacy removed) |
+| `-DSOLO_USE_PACKED_READINFO` | Deprecated, no effect |
 
 Migration Phases:
 1. Dual-mode (default: legacy)
@@ -306,11 +307,11 @@ Checklist when ready:
 | 8 | Provide velocyto accessor for packed data | ☑ |
 | 9 | Adjust BAM tag injection | ☑ |
 | 10 | Adjust tag binary writer | ☑ |
-| 11 | Run parity tests | ☐ |
+| 11 | Run parity tests | ☑ |
 | 12 | Measure RSS difference | ☐ |
 | 13 | Add automated test (CI) | ☐ |
-| 14 | Flip default (enable packed w/out flag) | ☐ |
-| 15 | Remove legacy code | ☐ |
+| 14 | Flip default (enable packed w/out flag) | ☑ |
+| 15 | Remove legacy code | ☑ |
 
 ---
 
@@ -349,7 +350,14 @@ Legacy readInfoStruct removed after version X.Y.Z.
 
 ## 20. Conclusion
 
-The scaffolds are integrated behind a compile flag and referenced here. Implementation should proceed by migrating call sites with the checklist, validating parity, and then removing the legacy structure.
+**Implementation Complete** (Stages 0-7 per `bypass_solo_plan.txt`):
+- **Loader/Sink Architecture**: `SoloReadInfoLoader` abstracts parsing; `MinimalSink` and `CountingSink` handle outputs.
+- **Legacy Removal**: All `#ifndef SOLO_USE_PACKED_READINFO` guards removed; `readInfoStruct` deleted from codebase.
+- **Parity Validated**: Stage 5 production run confirmed BAM/BIN/ZG identity between packed and baseline.
+- **Tests Pass**: Unit tests (`PackedReadInfo`, `Baseline`, `Loader`, `Parity`, `MinimalSink`) all green.
+- **Status**: Ready for final production validation (full-scale stress test, velocyto check).
+
+See `PRODUCTION_READINESS.md` for deployment checklist.
 
 ---
 

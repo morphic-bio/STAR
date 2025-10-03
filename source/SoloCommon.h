@@ -4,10 +4,8 @@
 #include <array>
 #include <unordered_map>
 
-typedef struct{
-    uint64 cb; 
-    uint32 umi;
-} readInfoStruct;
+// Legacy readInfoStruct removed in favor of packed read info (Stage 6 cleanup).
+// For per-read data, use SoloFeature::packedReadInfo.data (vector<uint64>) with PackedReadInfo helpers.
 
 typedef struct{
     uint32 tr; 

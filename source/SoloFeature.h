@@ -15,9 +15,7 @@
 
 #include "SoloFilteredCells.h"
 
-#ifdef SOLO_USE_PACKED_READINFO
 #include "PackedReadInfo.h"
-#endif
 
 class SoloFeature {
 private:
@@ -32,6 +30,9 @@ private:
     uint32 rguStride;
     
 public:
+    // Expose stride accessor for sinks
+    uint32 getRGUStride() const { return rguStride; }
+    void setRGUStride(uint32 v) { rguStride = v; }
     ParametersSolo &pSolo;
 
     SoloReadFeature *readFeatSum, **readFeatAll;
@@ -43,9 +44,9 @@ public:
     uint32 nCB;
     uint32 featuresNumber; //number of features (i.e. genes, SJs, etc)
 
-    uint32 *rGeneUMI;//mapped reads sorted by CB
-    uint32 *rCBn;//number of reads for detected CBs in the whitelist
-    uint32 **rCBp;//array of pointers to each CB sub-array
+    uint32 *rGeneUMI = nullptr;//mapped reads sorted by CB
+    uint32 *rCBn = nullptr;//number of reads for detected CBs in the whitelist
+    uint32 **rCBp = nullptr;//array of pointers to each CB sub-array
 
     vector<uint32> indCB;//index of detected CBs in the whitelist
     vector<uint32> indCBwl; //reverse of indCB: index of WL CBs in detected CB list
@@ -75,11 +76,7 @@ public:
     
     array<vector<uint64>,2> sjAll;
     
-#ifndef SOLO_USE_PACKED_READINFO
-    vector<readInfoStruct> readInfo; //legacy corrected CB/UMI information for each read
-#else
-    PackedReadInfo packedReadInfo;   // new packed representation (8 bytes per read)
-#endif
+    PackedReadInfo packedReadInfo;   // packed representation (8 bytes per read)
     SoloReadFlagClass readFlagCounts;
 
     
@@ -123,10 +120,8 @@ public:
     void loadRawMatrix();
     
     void writeTagTableIfRequested(bool filteredPass);
-    void finalizeTagTableFromReadInfo(); // Helper to update BAMTagBuffer from readInfo
-#ifdef SOLO_USE_PACKED_READINFO
+    void finalizeTagTableFromReadInfo();
     void initPackedReadInfo(uint32_t nReads) { packedReadInfo.init(nReads, pSolo.cbWLstr.size(), pSolo.umiL); }
-#endif
 };
 
 #endif

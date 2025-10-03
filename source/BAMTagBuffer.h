@@ -9,9 +9,7 @@
 #include <mutex>
 #include <cstdint>
 
-#ifdef SOLO_USE_PACKED_READINFO
 #include "PackedReadInfo.h"
-#endif
 
 struct BAMTagEntry {
     uint32_t recordIndex; // BAM record index for ordering
@@ -28,17 +26,10 @@ public:
 
     void append(const BAMRecordMeta& meta);
 
-#ifndef SOLO_USE_PACKED_READINFO
-    void writeTagBinary(const std::string& outputPath,
-                        const std::vector<readInfoStruct>& readInfo,
-                        uint64_t cbBits,
-                        uint64_t umiBits);
-#else
     void writeTagBinaryPacked(const std::string& outputPath,
                               const PackedReadInfo& packed,
                               uint64_t cbBits,
                               uint64_t umiBits);
-#endif
     void clear();
     size_t size() const { return entries.size(); }
 private:

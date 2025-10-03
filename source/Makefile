@@ -45,8 +45,8 @@ CFLAGS ?= -pipe -Wall -Wextra -O3
 CXXFLAGS_SIMD ?= -mavx2
 
 # Unconditionally set essential flags and optimization options
-# Enable packed ReadInfo by default; legacy path can be re-enabled by removing this define
-CXXFLAGS_common := -std=c++11 -fopenmp -DSOLO_USE_PACKED_READINFO $(COMPTIMEPLACE) $(GIT_BRANCH_COMMIT_DIFF)
+# Packed ReadInfo is the only supported path (legacy removed)
+CXXFLAGS_common := -std=c++11 -fopenmp $(COMPTIMEPLACE) $(GIT_BRANCH_COMMIT_DIFF)
 CXXFLAGS_main := -O3 $(CXXFLAGS_common)
 CXXFLAGS_gdb := -O0 -g3 $(CXXFLAGS_common)
 
@@ -68,7 +68,7 @@ OBJECTS = systemFunctions.o funPrimaryAlignMark.o \
 	ParametersSolo.o SoloRead.o SoloRead_record.o \
 	SoloReadBarcode.o SoloReadBarcode_getCBandUMI.o SoloBarcode_extractBarcode.o \
 	SoloReadFeature.o SoloReadFeature_record.o SoloReadFeature_inputRecords.o \
-	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_prepareReadInfoOnly.o SoloFeature_addBAMtags.o SoloFeature_writeTagTable.o \
+	Solo.o SoloFeature.o SoloFeature_outputResults.o SoloFeature_processRecords.o SoloFeature_prepareReadInfoOnly.o SoloFeature_addBAMtags.o SoloFeature_writeTagTable.o SoloReadInfoLoader.o SoloReadInfoSink.o \
 	BAMTagBuffer.o BAMTagBinaryWriter.o PackedReadInfo.o \
 	ReadAlign_transformGenome.o Genome_transformGenome.o Transcript_convertGenomeCigar.o \
 	twoPassRunPass1.o samHeaders.o Genome_genomeLoad.o Genome_genomeOutLoad.o Transcript_transformGenome.o ReadAlign_outputSpliceGraphSAM.o \
@@ -118,8 +118,46 @@ test_packed_readinfo:
 	$(CXX) -std=c++11 -I./ $(CPPFLAGS) $(CXXFLAGS) ../test/PackedReadInfo_test.cpp PackedReadInfo.cpp -o ../test/pri_test
 	../test/pri_test
 
+.PHONY: test_SoloReadInfoBaseline
+# NOTE: This target links against most STAR objects (excluding STAR.o) which is heavy for a tiny harness.
+# Once the loader abstraction is introduced, consider extracting a smaller test lib to reduce build time.
+test_SoloReadInfoBaseline: CXXFLAGS := $(CXXFLAGSextra) $(CXXFLAGS_main) $(CXXFLAGS)
+test_SoloReadInfoBaseline: LDFLAGS := $(LDFLAGSextra) $(LDFLAGS_shared) $(LDFLAGS)
+test_SoloReadInfoBaseline: Depend.list parametersDefault.xxd $(filter-out STAR.o,$(OBJECTS))
+	$(CXX) $(CXXFLAGS) ../test/SoloReadInfoBaseline_test.cpp $(filter-out STAR.o,$(OBJECTS)) $(LDFLAGS) -o ../test/solo_readinfo_baseline
+	../test/solo_readinfo_baseline
+
 .PHONY: test
-test: test_packed_readinfo
+test: test_packed_readinfo test_SoloReadInfoBaseline test_SoloReadInfoLoader test_SoloReadInfoParity test_MinimalSink
+
+.PHONY: test_MinimalSink
+test_MinimalSink: CXXFLAGS := $(CXXFLAGSextra) $(CXXFLAGS_main) $(CXXFLAGS)
+test_MinimalSink: LDFLAGS := $(LDFLAGSextra) $(LDFLAGS_shared) $(LDFLAGS)
+test_MinimalSink: Depend.list parametersDefault.xxd $(filter-out STAR.o,$(OBJECTS))
+ifeq ($(STAR_TEST_SKIP_TXOME),)
+	$(CXX) $(CXXFLAGS) ../test/MinimalSink_test.cpp $(filter-out STAR.o,$(OBJECTS)) $(LDFLAGS) -o ../test/minimal_sink_test
+	../test/minimal_sink_test
+else
+	@echo "Skipping MinimalSink_test due to STAR_TEST_SKIP_TXOME=1 or missing STAR_TXOME_DIR"
+endif
+# Loader unit test
+.PHONY: test_SoloReadInfoLoader
+test_SoloReadInfoLoader: CXXFLAGS := $(CXXFLAGSextra) $(CXXFLAGS_main) $(CXXFLAGS)
+test_SoloReadInfoLoader: LDFLAGS := $(LDFLAGSextra) $(LDFLAGS_shared) $(LDFLAGS)
+test_SoloReadInfoLoader: Depend.list parametersDefault.xxd $(filter-out STAR.o,$(OBJECTS))
+	$(CXX) $(CXXFLAGS) ../test/SoloReadInfoLoader_test.cpp $(filter-out STAR.o,$(OBJECTS)) $(LDFLAGS) -o ../test/solo_readinfo_loader
+	../test/solo_readinfo_loader
+
+# Parity test (loader minimal vs counting)
+.PHONY: test_SoloReadInfoParity
+test_SoloReadInfoParity: CXXFLAGS := $(CXXFLAGSextra) $(CXXFLAGS_main) $(CXXFLAGS)
+test_SoloReadInfoParity: LDFLAGS := $(LDFLAGSextra) $(LDFLAGS_shared) $(LDFLAGS)
+test_SoloReadInfoParity: Depend.list parametersDefault.xxd $(filter-out STAR.o,$(OBJECTS))
+	$(CXX) $(CXXFLAGS) ../test/SoloReadInfoParity_test.cpp $(filter-out STAR.o,$(OBJECTS)) $(LDFLAGS) -o ../test/solo_readinfo_parity
+	../test/solo_readinfo_parity
+
+.PHONY: ctest
+ctest: test
 
 
 opal/opal.o : opal/opal.cpp opal/opal.h
